@@ -8,6 +8,7 @@ const { createHealthRouter } = require('./routes/health');
 const { createWebhookRouter } = require('./routes/webhook');
 const { createAuthRouter } = require('./routes/auth');
 const { createLeadsRouter } = require('./routes/leads');
+const { createWhatsappPairRouter } = require('./routes/whatsappPair');
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
 
@@ -26,9 +27,30 @@ const { createFailedEventsRepo } = require('./services/failedEventsRepo');
  * @param {string} deps.sessionSecret
  * @param {string} deps.ownerUsername
  * @param {string} deps.ownerPassword
+ * @param {string} [deps.whatsappMode] - 'cloud_api' (default) | 'baileys'
+ *   (FR-301). Defaulted here (rather than required) so every pre-existing
+ *   caller of createApp() -- including all 61 original tests -- keeps
+ *   working unmodified, exactly as if this dual-mode change didn't exist.
+ * @param {ReturnType<typeof import('./services/baileysConnector').createBaileysConnector>|null} [deps.baileysConnector]
+ *   - only relevant when whatsappMode is 'baileys'; used solely to render
+ *   the pairing screen's live status (FR-303). createApp() never calls
+ *   `.start()` on it -- that's src/server.js's job, same pattern as
+ *   metaClient already being constructed outside createApp() and injected
+ *   in.
  */
 function createApp(deps) {
-  const { db, metaClient, questionsConfig, verifyToken, appSecret, sessionSecret, ownerUsername, ownerPassword } = deps;
+  const {
+    db,
+    metaClient,
+    questionsConfig,
+    verifyToken,
+    appSecret,
+    sessionSecret,
+    ownerUsername,
+    ownerPassword,
+    whatsappMode = 'cloud_api',
+    baileysConnector = null,
+  } = deps;
 
   const leadsRepo = createLeadsRepo(db);
   const failedEventsRepo = createFailedEventsRepo(db);
@@ -53,6 +75,7 @@ function createApp(deps) {
   app.use(createWebhookRouter({ leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret }));
   app.use(createAuthRouter({ ownerUsername, ownerPassword }));
   app.use(createLeadsRouter({ leadsRepo }));
+  app.use(createWhatsappPairRouter({ whatsappMode, baileysConnector }));
 
   app.get('/', (req, res) => res.redirect('/leads'));
 

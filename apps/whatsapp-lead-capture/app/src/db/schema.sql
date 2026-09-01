@@ -29,5 +29,12 @@ CREATE TABLE IF NOT EXISTS failed_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   raw_payload TEXT NOT NULL,
   error_message TEXT NOT NULL,
+  -- Added for FR-305 (docs/sdd/changes/2026-09-01-baileys-dual-mode.md):
+  -- distinguishes which connector recorded the failure ('whatsapp_cloud_api'
+  -- or 'whatsapp_baileys'), e.g. a Baileys logged-out disconnect. Defaults
+  -- to the original (only) channel so this is a backward-compatible
+  -- addition -- failedEventsRepo.record() still works exactly as before if
+  -- a caller doesn't pass one.
+  channel TEXT NOT NULL DEFAULT 'whatsapp_cloud_api',
   occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

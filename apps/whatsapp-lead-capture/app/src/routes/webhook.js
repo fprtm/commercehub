@@ -3,7 +3,8 @@
 const express = require('express');
 const { verifySignature } = require('../utils/signature');
 const { extractMessages } = require('../services/parseWebhookPayload');
-const { decideNextAction, ACTIONS } = require('../services/stateMachine');
+const { ACTIONS } = require('../services/stateMachine');
+const { createInboundMessageProcessor } = require('../services/inboundMessageProcessor');
 const { log } = require('../utils/logger');
 
 function captureRawBody(req, res, buf) {
@@ -41,6 +42,17 @@ function createWebhookRouter(deps) {
   const { leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret } = deps;
   const router = express.Router();
 
+  // FR-302: the actual state-machine-driving logic lives in the shared
+  // processor (src/services/inboundMessageProcessor.js) so the Baileys
+  // connector can call the exact same code path -- this route is now just
+  // an adapter that maps Meta's webhook payload shape onto that shared
+  // contract.
+  const { processInboundMessage } = createInboundMessageProcessor({
+    leadsRepo,
+    questionsConfig,
+    sendTextMessage: metaClient.sendTextMessage,
+  });
+
   // GET /webhook -- Meta's verification handshake (Phase L).
   router.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -57,36 +69,13 @@ function createWebhookRouter(deps) {
   });
 
   async function processMessage(message) {
-    const existingLead = leadsRepo.findByPhone(message.from);
-    const decision = decideNextAction({
-      existingLead,
-      messageText: message.text,
-      config: questionsConfig,
+    return processInboundMessage({
+      phoneNumber: message.from,
+      messageBody: message.text,
+      messageType: message.type,
+      timestamp: toIsoTimestamp(message.timestamp),
+      channel: 'whatsapp_cloud_api',
     });
-
-    let lead = existingLead;
-    if (decision.createLead) {
-      lead = leadsRepo.create({
-        phoneNumber: message.from,
-        firstMessageAt: toIsoTimestamp(message.timestamp),
-      });
-    }
-    if (decision.leadPatch && lead) {
-      lead = leadsRepo.saveAnswers(lead.id, decision.leadPatch);
-    }
-
-    for (const replyText of decision.replies) {
-      // eslint-disable-next-line no-await-in-loop -- Meta requires messages in this exact order
-      await metaClient.sendTextMessage(message.from, replyText);
-    }
-
-    log('webhook_message_processed', {
-      leadId: lead?.id,
-      action: decision.action,
-      reason: decision.reason,
-    });
-
-    return { lead, decision };
   }
 
   // POST /webhook -- inbound message event (Phase L, TD-004: always 200).
@@ -125,6 +114,7 @@ function createWebhookRouter(deps) {
         failedEventsRepo.record({
           rawPayload: req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {}),
           errorMessage: err.message,
+          channel: 'whatsapp_cloud_api',
         });
       } catch (recordErr) {
         // If even logging the failure fails, we still must not throw back

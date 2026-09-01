@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rimba Apparel — WhatsApp Connection</title>
+  <% if (status === 'qr_pending' || status === 'connecting' || status === 'reconnecting' || status === 'disconnected') { %>
+    <meta http-equiv="refresh" content="5">
+  <% } %>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f6f5f2; margin: 0; color: #2b2b2b; }
+    header { background: #2b2b2b; color: #fff; padding: 1rem 1.5rem; }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    main { max-width: 560px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: #fff; padding: 2rem; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); text-align: center; }
+    .risk-notice { background: #fff3cd; color: #664d03; padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1.5rem; text-align: left; font-size: 0.92rem; line-height: 1.5; }
+    .risk-notice strong { display: block; margin-bottom: 0.3rem; }
+    .status-box { padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.95rem; text-align: left; }
+    .status-open { background: #eaf7ea; color: #1e7d1e; }
+    .status-qr { background: #e7f3ff; color: #0b5fb0; }
+    .status-warn { background: #ffe4e4; color: #b3261e; }
+    .status-neutral { background: #f0f0f0; color: #555; }
+    img.qr { max-width: 280px; width: 100%; border: 1px solid #eee; border-radius: 8px; padding: 0.5rem; background: #fff; }
+    form.reset-form { margin-top: 1rem; }
+    button { padding: 0.6rem 1.2rem; background: #2b2b2b; color: #fff; border: none; border-radius: 6px; font-size: 0.95rem; cursor: pointer; }
+    button:hover { background: #444; }
+    a.back-link { display: inline-block; margin-top: 1.5rem; color: #555; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Rimba Apparel — WhatsApp Connection</h1>
+  </header>
+  <main>
+    <div class="card">
+      <% if (whatsappMode !== 'baileys') { %>
+        <div class="status-box status-neutral">
+          <strong>Baileys mode is not active.</strong>
+          <p>This app is currently running in <strong>Cloud API mode</strong>
+          (<code>WHATSAPP_MODE=cloud_api</code>), using Meta's official
+          WhatsApp Cloud API. There is no pairing step in this mode — the
+          business's WhatsApp number is connected via the Meta App
+          dashboard instead.</p>
+        </div>
+      <% } else { %>
+        <!--
+          NFR-303 (Honesty): this disclosure is shown on every load while
+          Baileys mode is active, not just once at setup, and not buried
+          in a code comment or README-only footnote.
+        -->
+        <div class="risk-notice">
+          <strong>Ban-risk trade-off — please read before pairing</strong>
+          Baileys connects using an unofficial, reverse-engineered
+          WhatsApp protocol — not Meta's official Cloud API. WhatsApp does
+          not support or sanction this. The connected number carries a
+          real risk of being banned or rate-limited, even for a
+          reply-only usage pattern like this app's. Use a number you are
+          willing to lose — not the business owner's primary/personal
+          number — and treat this as a lower-cost, higher-risk tier
+          compared to the official Cloud API.
+        </div>
+
+        <% if (status === 'open') { %>
+          <div class="status-box status-open">
+            <strong>Connected.</strong> This app is paired with a WhatsApp
+            number and is receiving/replying to messages automatically.
+          </div>
+        <% } else if (status === 'qr_pending' && qrDataUrl) { %>
+          <div class="status-box status-qr">
+            <strong>Scan to connect.</strong> Open WhatsApp on the phone
+            you want to pair → Settings → Linked Devices → Link a Device,
+            then scan this code.
+          </div>
+          <img class="qr" src="<%= qrDataUrl %>" alt="WhatsApp pairing QR code">
+        <% } else if (status === 'reconnecting') { %>
+          <div class="status-box status-neutral">
+            <strong>Reconnecting…</strong> The connection dropped
+            (network blip or a WhatsApp-side restart) and the app is
+            automatically retrying with backoff. This page refreshes
+            itself every few seconds — no action needed.
+          </div>
+        <% } else if (status === 'action_needed') { %>
+          <div class="status-box status-warn">
+            <strong>Reconnect needed.</strong>
+            <%= disconnectReasonMessage || 'The WhatsApp connection cannot be automatically recovered.' %>
+            The bot will <strong>not</strong> keep retrying on its
+            own — retrying a session in this state is pointless — so it has
+            stopped responding to messages until it's re-paired.
+          </div>
+          <form class="reset-form" method="POST" action="/whatsapp/pair/reset">
+            <button type="submit">Generate new QR code</button>
+          </form>
+        <% } else { %>
+          <div class="status-box status-neutral">
+            <strong>Starting connection…</strong> Waiting for a QR code
+            from WhatsApp. This page refreshes itself every few seconds.
+          </div>
+        <% } %>
+      <% } %>
+
+      <a class="back-link" href="/leads">&larr; Back to leads dashboard</a>
+    </div>
+  </main>
+</body>
+</html>

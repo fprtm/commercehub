@@ -52,6 +52,11 @@ async function startTestServer(overrides = {}) {
     sessionSecret: 'test-session-secret',
     ownerUsername: overrides.ownerUsername || 'owner',
     ownerPassword: overrides.ownerPassword || 'secret-password',
+    // Dual-mode (FR-301..FR-305) overrides -- undefined by default, so
+    // every pre-existing caller of startTestServer() keeps exercising the
+    // original cloud_api-only behavior unmodified (NFR-302).
+    whatsappMode: overrides.whatsappMode,
+    baileysConnector: overrides.baileysConnector,
   });
 
   const server = await new Promise((resolve) => {

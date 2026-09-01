@@ -4,4 +4,8 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+# Baileys paired-session credentials (FR-303) -- local/ephemeral, like the
+# rest of data/, and sensitive (equivalent to a logged-in WhatsApp Web
+# session) so it must never be committed.
+data/baileys-auth/
 npm-debug.log*

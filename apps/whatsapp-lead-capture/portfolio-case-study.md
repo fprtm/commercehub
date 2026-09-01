@@ -51,6 +51,14 @@ This proportionality is deliberate, not a shortcut: a 2-person business doesn't 
 
 Full rationale for every major technical choice — including two rejected alternatives per decision — is documented in `docs/sdd/design/technical-design.md` (TD-001 through TD-004): Node/Express over a no-code tool (portfolio ownership), SQLite over Postgres (proportional to actual data volume), server-rendered EJS over a SPA (matches the plain-usability requirement, avoids needless build complexity), and "webhook always returns 200" over "return an error code on failure" (prevents Meta's retry behavior from creating duplicate leads).
 
+## Pricing-Tier Flexibility: Official API vs. Baileys
+
+Added after the initial build (`docs/sdd/changes/2026-09-01-baileys-dual-mode.md`): the WhatsApp connector now supports two interchangeable modes behind one shared interface — the official Meta Cloud API (recommended default, zero ban risk, but needs Meta Business verification and per-message cost) and Baileys (an unofficial, reverse-engineered connection method, free and instantly set up on an existing number, at the cost of a real — though usage-pattern-dependent — ban risk). This exists specifically for a client not yet ready to invest in the official API's setup friction and cost, with the ban-risk trade-off disclosed in plain language directly on the pairing screen, not just buried in documentation.
+
+Because the state machine, database, and dashboard were already built behind a clean adapter boundary, adding Baileys required touching zero business logic — only a new adapter module and a pairing screen. The Baileys path also needed real reconnection engineering: automatically recovering from ordinary network drops with exponential backoff, while correctly recognizing several genuinely permanent failure states (logged out, re-paired to another device, a corrupted session, or the number being blocked) and surfacing those clearly instead of retrying forever. An independent review initially caught a real gap here — three of those permanent-failure cases were being silently retried forever with a false "no action needed" message — which was fixed and re-verified before this was called done. Full detail: `docs/sdd/review/baileys-dual-mode-review.md`.
+
+This directly strengthens the freelance pitch: it's not "here's a WhatsApp bot," it's "here's a WhatsApp bot with an honest, explained choice between free-but-risky and paid-but-safe, backed by a real answer to 'what happens if the connection drops.'"
+
 ## Before vs After
 
 | | Before | After |
