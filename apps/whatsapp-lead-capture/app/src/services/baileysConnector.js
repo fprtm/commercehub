@@ -26,6 +26,16 @@ async function defaultAuthStateProvider(authDir) {
   return useMultiFileAuthState(authDir);
 }
 
+/**
+ * FR-703 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
+ * a real client got logged out shortly after connecting, and tracing the
+ * code found this socket was being created with ZERO identity/fingerprint
+ * configuration beyond bare library defaults -- everything below is a
+ * documented, commonly-recommended-practice mitigation for that, not a
+ * guarantee (see the README's "Dual WhatsApp mode" section for the honest
+ * framing -- the underlying ban/detection risk of an unofficial protocol
+ * implementation is not eliminated by any of this).
+ */
 async function defaultMakeSocket({ auth }) {
   const baileys = require('@whiskeysockets/baileys'); // eslint-disable-line global-require
   const makeWASocket = baileys.default || baileys.makeWASocket;
@@ -33,6 +43,35 @@ async function defaultMakeSocket({ auth }) {
     auth,
     printQRInTerminal: false,
     logger: defaultLoggerInstance(),
+    // FR-703: an explicit, realistic client identity instead of leaving
+    // this at the library's own bare default. `Browsers` is a helper this
+    // installed version of @whiskeysockets/baileys (^7.0.0-rc14) actually
+    // exports (`Browsers.ubuntu/macOS/windows/android/appropriate/baileys`)
+    // -- `Browsers.ubuntu('Chrome')` produces the
+    // `['Ubuntu', 'Chrome', '...']` browser tuple WhatsApp's multi-device
+    // protocol expects, presenting as an ordinary desktop-linked-device
+    // session rather than an unnamed/generic client. This is a
+    // commonly-recommended Baileys practice, not something this project
+    // invented -- see the README for the honest "mitigation, not a fix"
+    // framing.
+    browser: baileys.Browsers.ubuntu('Chrome'),
+    // FR-703: do NOT flip the account to "online" the moment the socket
+    // connects. A number that's paired via an unofficial client but never
+    // otherwise appears online (this app is reply-only, not an interactive
+    // client anyone is "using") is a smaller behavioral fingerprint than
+    // one that immediately, robotically goes "online" on every reconnect.
+    // Baileys defaults this to `false` already; set explicitly so the
+    // choice is documented here instead of relying on an implicit library
+    // default that could silently change in a future version.
+    markOnlineOnConnect: false,
+    // FR-703: skip syncing the account's full message history on initial
+    // connect. This app only cares about NEW inbound messages from this
+    // point forward (see handleMessagesUpsert()'s `type !== 'notify'`
+    // filter below, which already discards replayed history) -- a full
+    // history sync is extra load/traffic this app has no use for, and is
+    // one of the most commonly-recommended settings to reduce for a
+    // lightweight, reply-only Baileys client like this one.
+    syncFullHistory: false,
   });
 }
 

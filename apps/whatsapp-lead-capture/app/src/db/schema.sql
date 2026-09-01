@@ -51,6 +51,31 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 INSERT OR IGNORE INTO app_settings (id, auto_reply_enabled) VALUES (1, 1);
 
+-- Added for docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md
+-- (FR-702): Products move from config/products.json (see
+-- src/services/productsLoader.js -- now legacy/seed-only, see
+-- src/services/productsSeed.js) into the database as the source of truth,
+-- both for fuzzy-matching (src/services/productMatcher.js, via
+-- src/services/productsRepo.js's listActive()) and for full CRUD
+-- management from the dashboard (src/routes/products.js).
+--
+-- `aliases` is a JSON-encoded text column (an array of strings), not a
+-- normalized child table -- same "don't overengineer" judgment call
+-- productsLoader.js's own doc comment already made about the Product shape:
+-- a handful of short aliases per product doesn't justify a join for this
+-- project's scope. `is_active` is the soft-delete flag (FR-702:
+-- "deactivate", not delete -- always re-activatable, no separate undo).
+CREATE TABLE IF NOT EXISTS products (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL CHECK (length(trim(name)) > 0),
+  aliases TEXT NOT NULL DEFAULT '[]',
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_products_is_active ON products(is_active);
+
 CREATE TABLE IF NOT EXISTS failed_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   raw_payload TEXT NOT NULL,

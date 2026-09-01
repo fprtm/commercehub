@@ -10,9 +10,12 @@ const { createAuthRouter } = require('./routes/auth');
 const { createLeadsRouter } = require('./routes/leads');
 const { createSettingsRouter } = require('./routes/settings');
 const { createWhatsappPairRouter } = require('./routes/whatsappPair');
+const { createProductsRouter } = require('./routes/products');
+const { createFailedEventsRouter } = require('./routes/failedEvents');
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
 const { createSettingsRepo } = require('./services/settingsRepo');
+const { createProductsRepo } = require('./services/productsRepo');
 
 /**
  * Builds a fully-wired Express app from injected dependencies. Kept as a
@@ -53,6 +56,20 @@ const { createSettingsRepo } = require('./services/settingsRepo');
  *   reasoning as `productsConfig` above.
  * @param {string[]} [deps.intentDenylist] - forwarded straight through,
  *   same reasoning as `productsConfig` above (post-review Critical fix).
+ * @param {ReturnType<typeof import('./services/productsRepo').createProductsRepo>} [deps.productsRepo]
+ *   - FR-702 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
+ *   when injected, this exact instance is what both the `/products`
+ *   dashboard CRUD routes AND the webhook's DB-backed fuzzy-matching (see
+ *   inboundMessageProcessor.js) read/write. When omitted (every
+ *   pre-existing test), createApp() still builds its own instance from
+ *   `db` for the `/products` routes (same construct-from-`db` pattern as
+ *   leadsRepo/failedEventsRepo/settingsRepo below) so that page works in
+ *   every environment -- but that internally-defaulted instance is
+ *   deliberately NOT forwarded into the webhook wiring, so fuzzy-matching
+ *   stays exactly as inert as before for every caller that doesn't
+ *   explicitly opt in (NFR-701). `src/server.js` is the one production
+ *   caller that injects a real instance here (after seeding it once from
+ *   config/products.json -- see `src/services/productsSeed.js`).
  */
 function createApp(deps) {
   const {
@@ -79,10 +96,16 @@ function createApp(deps) {
     productsConfig,
     matchThreshold,
     intentDenylist,
+    productsRepo: injectedProductsRepo,
   } = deps;
 
   const leadsRepo = createLeadsRepo(db);
   const failedEventsRepo = createFailedEventsRepo(db);
+  // FR-702: always available for the /products dashboard routes below;
+  // only forwarded into the webhook's matching wiring when explicitly
+  // injected by the caller -- see the doc comment above and
+  // inboundMessageProcessor.js's own doc comment for the full reasoning.
+  const productsRepo = injectedProductsRepo || createProductsRepo(db);
   // FR-401..FR-403 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md):
   // constructed here (same pattern as leadsRepo/failedEventsRepo above) so
   // both the webhook route and the dashboard/settings routes below share
@@ -122,6 +145,10 @@ function createApp(deps) {
       sleep,
       random,
       products: productsConfig,
+      // FR-702: deliberately the raw injected dep, not the possibly
+      // internally-defaulted `productsRepo` above -- see that const's
+      // comment for why this distinction matters (NFR-701).
+      productsRepo: injectedProductsRepo,
       matchThreshold,
       intentDenylist,
     }),
@@ -130,6 +157,8 @@ function createApp(deps) {
   app.use(createLeadsRouter({ leadsRepo, settingsRepo }));
   app.use(createSettingsRouter({ settingsRepo }));
   app.use(createWhatsappPairRouter({ whatsappMode, baileysConnector }));
+  app.use(createProductsRouter({ productsRepo }));
+  app.use(createFailedEventsRouter({ failedEventsRepo }));
 
   app.get('/', (req, res) => res.redirect('/leads'));
 

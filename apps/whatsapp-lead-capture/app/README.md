@@ -80,11 +80,50 @@ dependency) against everything in `tests/`. All tests run against an
 socket** — nothing touches a real network, a real Meta account, or a real
 WhatsApp number/QR scan anywhere in the suite.
 
-Current result: **182 passed, 0 failed** — 128 pre-existing, **plus 26
-added for the first version of fuzzy product matching**, **plus 19 more
-added for a first independent adversarial review's fixes**, **plus 9 more
-added for a second independent review's retuning fixes** (all
-FR-501..FR-504, `docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`;
+Current result: **217 passed, 0 failed** — 182 pre-existing (unmodified,
+per NFR-701), **plus 35 added for dashboard navigation, database-backed
+Product management, and Baileys connection resilience**
+(`docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md`,
+FR-701..FR-703):
+
+- `tests/productsRepo.test.js` — 8 tests for the `products` table's
+  data-access layer in isolation: create/update/deactivate/activate,
+  alias normalization (trim, drop blanks), `listAll()` vs. `listActive()`,
+  deactivate never deleting the row, and NOT_FOUND errors for a bad id.
+- `tests/productsSeed.test.js` — 6 tests for the one-time JSON→database
+  seed step, including **NFR-703's idempotency requirement directly**:
+  running the same seed step 2, 3, and 4 times in a row against the same
+  DB creates exactly the products it would on the first run, never more —
+  proven by asserting `productsRepo.listAll().length` stays fixed across
+  repeated calls, not just "it didn't throw."
+- `tests/products.test.js` — 10 tests for the `/products` dashboard CRUD
+  routes over real HTTP: auth-gated (redirects to `/login` when
+  unauthenticated, for both the page and every POST action), create with
+  parsed comma-separated aliases, blank-name rejection, edit, deactivate
+  (soft-delete — row still exists, `is_active` flips), reactivate, and a
+  not-found id redirecting with a flash message instead of crashing.
+- `tests/productsDbMatching.test.js` — 4 end-to-end tests proving
+  fuzzy-matching now reads the Product catalog from the **database**, not
+  `config/products.json`: a dashboard-created product matches; deactivating
+  it via the real `POST /products/:id/deactivate` route makes it stop
+  matching on the very next independent inbound message (while the
+  earlier, already-matched lead's own record is left untouched);
+  reactivating makes it match again; and an empty DB catalog (fresh
+  install, nothing seeded/added yet) correctly flags every Q1 answer
+  `needs_review`.
+- `tests/navBar.test.js` — 7 tests for the shared nav partial (FR-701):
+  all four nav links (Leads/Products/Failed Events/Pairing) render on each
+  of the four authenticated pages; every one of those pages is still
+  auth-gated (nav bar is never visible unauthenticated); and the new
+  `/failed-events` page itself lists recorded failures / shows an empty
+  state.
+
+Below this, the original breakdown for fuzzy product matching itself
+(FR-501..FR-504) is unchanged from before this change — **182 pre-existing,
+128 original, plus 26 added for the first version of fuzzy product
+matching**, **plus 19 more added for a first independent adversarial
+review's fixes**, **plus 9 more added for a second independent review's
+retuning fixes** (`docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`;
 see "Independent adversarial review findings" and "Second independent
 review" below for what each batch fixes):
 
@@ -412,7 +451,27 @@ Edit `config/questions.json` — no code change required:
 The file must define exactly 2 questions (per FR-002's "up to 2 sequential
 qualifying questions") and is re-read on every server start.
 
-## Fuzzy product matching (FR-501..FR-504)
+## Dashboard navigation (FR-701)
+
+`docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md`.
+Every authenticated dashboard page — **Leads**, **Products**,
+**Failed Events**, **Pairing** — now shows a small, persistent nav bar
+linking to the other three, so nothing requires typing a URL by hand.
+Implemented as one shared EJS partial (`src/views/partials/nav.ejs`)
+included at the top of each page's view — the simplest reasonable
+approach for four pages sharing one nav, per the change doc — styled to
+match this app's existing minimal look (same font stack/palette as
+`leads.ejs`/`whatsappPair.ejs` already used, no new design language, no
+client-side JS anywhere in this app, this included).
+
+**Failed Events** (`/failed-events`) is a new read-only page added
+alongside the nav bar — the underlying `failed_events` table and
+`src/services/failedEventsRepo.js` already existed (FR-305/webhook error
+handling), but there was previously no dashboard route/view for it; adding
+one was necessary for the nav bar's "Failed Events" link to actually go
+somewhere instead of being a dead link.
+
+## Fuzzy product matching (FR-501..FR-504) and Product management (FR-702)
 
 `docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`. Every customer's
 answer to Q1 ("Which product are you interested in?") is now fuzzy-matched
@@ -432,29 +491,59 @@ Indonesian stemming + string similarity, **deliberately not an LLM** (see
   next to the raw `question1_answer` text, so the owner can read what the
   customer actually wrote and follow up manually.
 
-### Configuring the product catalog (FR-501)
+### Configuring the product catalog (FR-501, superseded by FR-702 below)
 
-Edit `config/products.json` — no code change required, re-read on every
-server start (same pattern as `config/questions.json` above):
+**As of `docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md`
+(FR-702), the product catalog itself lives in the database, managed from
+the dashboard's `/products` page — not in `config/products.json`.** Log in
+and open **Products** in the nav bar: add a product (name + comma-separated
+aliases), edit one, or deactivate/reactivate one (soft-delete — a
+deactivated product stops matching immediately but is never gone, and can
+be reactivated any time). No code change, no file edit, no server restart
+required for any of it — see `src/routes/products.js` /
+`src/services/productsRepo.js`.
+
+**What `config/products.json` is still for, and only for, after this
+change:**
+
+1. **One-time seed.** The very first time the app boots against an empty
+   `products` table, whatever `config/products.json` contains (if
+   anything) is copied into the database once — see
+   `src/services/productsSeed.js`. This exists purely so an existing
+   client's already-curated catalog isn't lost by this change. **Every
+   boot after that first one is a no-op** (NFR-703 — proven by
+   `tests/productsSeed.test.js`, including repeated-boot scenarios), and
+   the *file* is never consulted again for the product list itself.
+   Editing `config/products.json` after the first boot has **zero
+   effect** — this is FR-702's explicit acceptance criterion, not an
+   oversight.
+2. **`matchThreshold` / `intentDenylist`.** These two fields are matching
+   *tuning knobs*, not catalog data — FR-702 only moved the product list
+   itself into the database. They're still read from
+   `config/products.json` on every server start (same as before), or
+   overridden via `PRODUCT_MATCH_THRESHOLD` (env var) — see below.
 
 ```json
 {
   "matchThreshold": 0.65,
   "products": [
-    { "name": "Kaos Rimba Navy", "aliases": ["kaos navy", "kaos", "baju kaos"] },
-    { "name": "Kaos Rimba Hitam", "aliases": ["kaos hitam"] },
-    { "name": "Celana Rimba Cargo", "aliases": ["celana cargo", "celana"] },
-    { "name": "Jaket Rimba Outdoor", "aliases": ["jaket", "jaket outdoor"] }
+    { "name": "Kaos Rimba Navy", "aliases": ["kaos navy", "kaos", "baju kaos"] }
   ],
   "intentDenylist": ["nyesel", "bocor halus"]
 }
 ```
 
+(The `"products"` array above is only ever read for the one-time seed
+described above — add/edit/deactivate products from the dashboard from
+here on, not this file.)
+
 Each product is intentionally lightweight: just a `name` and an optional
-list of `aliases` (Settled Decision #2 in the change doc) — **not**
-Project 3's full inventory model (no SKU, stock quantity, low-stock
-threshold, active flag). This project has no inventory concept at all;
-adding one was explicitly out of scope.
+list of `aliases` (Settled Decision #2 in the original fuzzy-matching
+change doc) — **not** Project 3's full inventory model (no SKU, stock
+quantity, low-stock threshold). This project has no inventory concept at
+all; adding one was explicitly out of scope. `is_active` (FR-702's
+deactivate/reactivate flag) is the one addition to that original shape —
+it's a dashboard-management concept, not an inventory one.
 
 The optional top-level `"intentDenylist"` array lets the owner add their
 own complaint/intent-shifting vocabulary — it's **unioned with** (not a
@@ -472,12 +561,13 @@ rarely types a product's full catalog name. Without at least one short,
 natural alias per product, only messages that closely echo the full name
 will match; everything else falls to `needs_review`. This is a deliberate,
 documented trade-off, not a bug: a business owner who wants better
-coverage adds more aliases (the actual words their customers tend to use),
-same spirit as tuning `config/questions.json`'s wording.
+coverage adds more aliases (the actual words their customers tend to use)
+from the Products page.
 
-An empty or missing `products.json` is not an error — every Q1 answer
-just falls through to `needs_review` until the owner adds products (see
-NFR-502 below).
+An empty product catalog (a fresh install with nothing seeded/added yet,
+or every product deactivated) is not an error — every Q1 answer just
+falls through to `needs_review` until the owner adds/reactivates products
+from the dashboard (see NFR-502 below, still true, now DB-backed).
 
 ### The matching algorithm (FR-502) and why 0.65
 
@@ -869,19 +959,70 @@ mode):**
   account is used anywhere in the suite (not possible in this environment —
   there is no phone available to scan a real QR code).
 
+### Connection-hardening options (FR-703) — a mitigation, not a fix
+
+`docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md`.
+A real live test showed the Baileys connection getting logged out shortly
+after connecting; tracing the code found `makeWASocket({...})`
+(`src/services/baileysConnector.js`'s `defaultMakeSocket`) was being
+called with **zero identity/fingerprint configuration** beyond bare
+library defaults. Three commonly-recommended options were reviewed and
+applied, each documented in code at the call site:
+
+- **`browser: Browsers.ubuntu('Chrome')`** — an explicit, realistic client
+  identity instead of an unnamed/generic default. `Browsers` is a helper
+  the installed `@whiskeysockets/baileys` version (`^7.0.0-rc14`) actually
+  exports (confirmed by inspecting the package directly — it also exports
+  `.macOS`, `.windows`, `.android`, `.baileys`, `.appropriate`); calling
+  `Browsers.ubuntu('Chrome')` produces the `['Ubuntu', 'Chrome', '22.04.4']`
+  tuple WhatsApp's multi-device protocol expects, presenting as an ordinary
+  desktop-linked-device session.
+- **`markOnlineOnConnect: false`** — this app is reply-only (never an
+  interactively "used" client), so it never flips the paired number to
+  "online" the moment the socket connects. Baileys already defaults this
+  to `false`; set explicitly so the choice is documented here rather than
+  relying on an implicit default that could silently change in a future
+  library version.
+- **`syncFullHistory: false`** — skips syncing the account's full message
+  history on initial connect. This app only acts on new inbound messages
+  from the moment it connects forward (`handleMessagesUpsert()` already
+  discards Baileys' replayed-history events, keeping only `type ===
+  'notify'`), so a full history sync is pure extra load/traffic with no
+  use to this app — one of the most commonly-recommended settings to
+  disable for a lightweight, reply-only client like this one.
+
+**Honest framing (NFR-702 — stated plainly, not oversold):** these three
+options are a **mitigation that follows commonly-recommended Baileys
+community practice**, applied because a real disconnect was actually
+observed and traced to their absence. They are **not a guarantee** against
+future disconnects, and they do **not** reduce the ban/detection risk
+already disclosed above (an unofficial, reverse-engineered protocol
+implementation is what it is, regardless of how realistic the client
+identity looks) — that risk is structural to using Baileys at all, not
+something a `browser` tuple or a couple of connection flags can eliminate.
+If WhatsApp's own detection changes, or the specific disconnect that
+prompted this change had a different root cause than a missing client
+identity, these settings may not help at all. Treat this the same way as
+every other risk disclosure in this README: a real trade-off, not a
+solved problem.
+
 ## Project layout
 
 ```
 app/
   config/questions.json       qualifying-question script (NFR-005)
-  config/products.json        Product catalog (name + optional aliases) for fuzzy matching (FR-501)
+  config/products.json        Product catalog seed + matchThreshold/intentDenylist tuning knobs --
+                               the "products" array is seed-only after first boot (FR-702); the
+                               database (see src/services/productsRepo.js) is the live catalog now
   src/
     app.js                    Express app factory (dependency-injected: db, connectors, config, mode)
-    server.js                 real entrypoint: wires env vars, real DB, mode-selected connector
+    server.js                 real entrypoint: wires env vars, real DB, mode-selected connector,
+                               seeds products from config/products.json once (FR-702)
     db/
-      schema.sql               Lead + FailedEvent + app_settings schema (+ FailedEvent.channel for
-                                FR-305; + app_settings single-row table for the auto-reply toggle;
-                                + leads.matched_product/needs_review for fuzzy product matching)
+      schema.sql               Lead + FailedEvent + app_settings + products schema (+ FailedEvent.channel
+                                for FR-305; + app_settings single-row table for the auto-reply toggle;
+                                + leads.matched_product/needs_review for fuzzy product matching; +
+                                products table -- name/aliases(JSON)/is_active -- for FR-702)
       index.js                 DB factory (createDb) — used by server.js and tests alike
       migrate.js                standalone `npm run migrate` script
     lib/
@@ -898,7 +1039,9 @@ app/
                                    lib/humanizedTiming.js instead of sending immediately -- FR-604;
                                    and now fuzzy-matches a Q1 answer against the Product catalog the
                                    moment it's accepted, suppressing that turn's Q2 prompt and
-                                   flagging needs_review below threshold -- FR-502..FR-504)
+                                   flagging needs_review below threshold -- FR-502..FR-504; catalog is
+                                   now read fresh from productsRepo.listActive() per message when a
+                                   productsRepo is injected -- FR-702)
       productMatcher.js          FR-502..FR-504: the fuzzy-matching algorithm itself (Indonesian
                                   stemming via sastrawijs + Jaro-Winkler token similarity via
                                   natural) -- pure function, no DB/network access, fully documented
@@ -907,12 +1050,19 @@ app/
                                  exposes markAsRead/sendTypingIndicator (FR-601/FR-604)
       baileysConnector.js       Baileys adapter: connection lifecycle, reconnect/backoff (FR-304),
                                  logged-out detection (FR-305), QR pairing (FR-303); now also
-                                 exposes markAsRead/sendTypingIndicator (FR-601/FR-604)
+                                 exposes markAsRead/sendTypingIndicator (FR-601/FR-604); now also sets
+                                 an explicit browser identity + markOnlineOnConnect/syncFullHistory
+                                 on the socket -- FR-703
       parseWebhookPayload.js    extracts normalized messages from a raw Meta payload (now also the
                                  message id/WAMID, threaded through for markAsRead -- FR-601)
       questionsLoader.js        loads/validates config/questions.json
-      productsLoader.js          FR-501: loads/validates config/products.json (same on-demand,
-                                  config-file pattern as questionsLoader.js)
+      productsLoader.js          FR-501: loads/validates config/products.json -- after FR-702, only
+                                  used for the one-time DB seed and for matchThreshold/intentDenylist
+      productsRepo.js            FR-702: `products` table data access -- create/update/
+                                  deactivate/activate/listAll/listActive -- the live Product catalog
+                                  source of truth from here on
+      productsSeed.js            FR-702/NFR-703: one-time, idempotent JSON->database product seed,
+                                  gated on "products table is empty" (not a separate seeded-flag)
       leadsRepo.js               Lead table data access (now also updateProductMatch() for
                                   FR-503/FR-504 -- a narrowly-scoped UPDATE, separate from
                                   saveAnswers(), so it can't clobber question1/2_answer or
@@ -928,20 +1078,30 @@ app/
       settings.js                POST /settings/auto-reply — toggles auto_reply_enabled (auto-reply
                                   toggle change)
       whatsappPair.js            GET /whatsapp/pair, POST /whatsapp/pair/reset (FR-303/FR-305)
+      products.js                FR-702: GET /products, POST /products, POST /products/:id,
+                                  POST /products/:id/deactivate, POST /products/:id/activate --
+                                  full Product CRUD, session-authenticated
+      failedEvents.js            FR-701: GET /failed-events -- read-only list of recorded failures
       health.js                  GET /health
-    middleware/requireAuth.js   session gate for the dashboard (reused by whatsappPair.js and
-                                 settings.js)
+    middleware/requireAuth.js   session gate for the dashboard (reused by whatsappPair.js,
+                                 settings.js, products.js, and failedEvents.js)
     utils/
       signature.js               X-Hub-Signature-256 verification
       logger.js                  structured console logging
     views/
       login.ejs                 server-rendered dashboard (EJS, no SPA — TD-003) -- UNCHANGED
+      partials/nav.ejs           FR-701: shared nav bar (Leads/Products/Failed Events/Pairing),
+                                  included at the top of every authenticated view below
       leads.ejs                 server-rendered dashboard; now also shows the auto-reply ON/OFF
                                  toggle at the top (auto-reply toggle change), the matched product
-                                 name under a Lead's Q1 answer, and a "Needs review" badge for
-                                 low-confidence/unmatched Q1 answers (FR-503/FR-504)
+                                 name under a Lead's Q1 answer, a "Needs review" badge for
+                                 low-confidence/unmatched Q1 answers (FR-503/FR-504), and the nav
+                                 bar (FR-701)
+      products.ejs               FR-702: Product CRUD page -- add/edit/deactivate/reactivate,
+                                  nav bar at top
+      failedEvents.ejs           FR-701: read-only Failed Events list, nav bar at top
       whatsappPair.ejs           pairing screen: QR / connected / reconnect-needed states,
-                                  ban-risk disclosure (NFR-303)
+                                  ban-risk disclosure (NFR-303); now also shows the nav bar (FR-701)
   tests/                        node:test unit + integration tests (see below)
   data/                         SQLite file + Baileys paired-session folder live here at
                                  runtime (both gitignored)

@@ -73,6 +73,21 @@ const { matchProduct } = require('./productMatcher');
  *   (an empty array `[]` counts as "provided" and activates matching --
  *   see productMatcher.js for why an empty catalog then safely always
  *   resolves to "no match"/needs_review rather than crashing).
+ * @param {ReturnType<typeof import('./productsRepo').createProductsRepo>} [deps.productsRepo] -
+ *   FR-702 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
+ *   when provided, the Product catalog is read fresh from the database
+ *   (`productsRepo.listActive()`) on every single call, instead of using
+ *   the static `products` array above -- same "no caching, always current"
+ *   pattern settingsRepo already uses for the auto-reply toggle (see
+ *   NFR-401 above), so a product just deactivated/edited via the dashboard
+ *   (src/routes/products.js) affects the very next inbound message, not
+ *   just after a server restart. `products` still takes precedence when
+ *   BOTH are provided (it never is, in production -- src/server.js injects
+ *   only `productsRepo` from here on) purely so every pre-existing
+ *   caller/test that passes a static `products` array (there are many, all
+ *   predating this change) keeps exercising fuzzy-matching exactly as
+ *   before, unmodified (NFR-701). Only `productsRepo` alone activates the
+ *   new DB-backed path.
  * @param {number} [deps.matchThreshold] - forwarded straight into
  *   productMatcher.js's `matchProduct` (defaults to
  *   productMatcher.js's DEFAULT_MATCH_THRESHOLD when omitted).
@@ -95,6 +110,7 @@ function createInboundMessageProcessor({
   sleep,
   random,
   products,
+  productsRepo,
   matchThreshold,
   intentDenylist,
 }) {
@@ -171,8 +187,14 @@ function createInboundMessageProcessor({
       // they send is handled completely normally by the (unmodified)
       // state machine.
       let replies = decision.replies;
-      if (decision.action === ACTIONS.ANSWER_Q1 && lead && Array.isArray(products)) {
-        const matchResult = matchProduct(messageBody, products, { threshold: matchThreshold, intentDenylist });
+      // FR-702: `products` (static array) wins when explicitly provided --
+      // see the constructor's doc comment above for why. Otherwise, an
+      // injected `productsRepo` is read fresh, right here, right before
+      // matching -- never at construction time -- so a dashboard
+      // deactivate/edit is reflected on the very next message.
+      const catalog = Array.isArray(products) ? products : productsRepo ? productsRepo.listActive() : undefined;
+      if (decision.action === ACTIONS.ANSWER_Q1 && lead && Array.isArray(catalog)) {
+        const matchResult = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
         if (matchResult.matched) {
           // FR-503: above threshold, today's flow proceeds completely
           // unchanged (`replies` is left as-is, so Q2 still gets sent) --

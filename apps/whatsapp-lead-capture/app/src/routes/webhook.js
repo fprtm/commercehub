@@ -54,6 +54,9 @@ function toIsoTimestamp(unixSecondsString) {
  *   inboundMessageProcessor.js's fuzzy-matching wiring. See that file's
  *   doc comment for why this is left undefined by default rather than
  *   defaulting to `[]`.
+ * @param {ReturnType<typeof import('../services/productsRepo').createProductsRepo>} [deps.productsRepo] -
+ *   FR-702, forwarded straight into inboundMessageProcessor.js -- see that
+ *   file's doc comment for the precedence between this and `products`.
  * @param {number} [deps.matchThreshold] - forwarded straight into
  *   inboundMessageProcessor.js (FR-502..FR-504).
  * @param {string[]} [deps.intentDenylist] - forwarded straight into
@@ -71,6 +74,7 @@ function createWebhookRouter(deps) {
     sleep,
     random,
     products,
+    productsRepo,
     matchThreshold,
     intentDenylist,
   } = deps;
@@ -94,6 +98,7 @@ function createWebhookRouter(deps) {
     sleep,
     random,
     products,
+    productsRepo,
     matchThreshold,
     intentDenylist,
   });

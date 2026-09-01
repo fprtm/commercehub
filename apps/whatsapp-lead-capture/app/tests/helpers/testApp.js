@@ -2,6 +2,7 @@
 
 const { createApp } = require('../../src/app');
 const { createDb } = require('../../src/db');
+const { createProductsRepo } = require('../../src/services/productsRepo');
 
 const TEST_CONFIG = {
   acknowledgment: 'This is an automated reply from Rimba Apparel. Thanks for messaging us!',
@@ -60,6 +61,17 @@ async function startTestServer(overrides = {}) {
   const db = createDb(':memory:');
   const metaClient = overrides.metaClient || createMockMetaClient(overrides.mockMetaOptions);
 
+  // FR-702 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
+  // `enableDbProducts: true` opts a test into DB-backed fuzzy-matching --
+  // constructs a real productsRepo against this same in-memory `db` and
+  // injects it into createApp(), exactly like src/server.js does in
+  // production (see inboundMessageProcessor.js's doc comment for the
+  // `products` vs. `productsRepo` precedence). Left undefined by default so
+  // every pre-existing test (the vast majority, which never set this) keeps
+  // exercising fuzzy-matching exactly as before -- either inert, or driven
+  // by `overrides.productsConfig`'s static array (NFR-701).
+  const productsRepo = overrides.enableDbProducts ? createProductsRepo(db) : undefined;
+
   const app = createApp({
     db,
     metaClient,
@@ -101,6 +113,7 @@ async function startTestServer(overrides = {}) {
     // pass it keeps exercising fuzzy-matching as a complete no-op
     // (NFR-502), same reasoning as `whatsappMode`/`baileysConnector` above.
     productsConfig: overrides.productsConfig,
+    productsRepo,
     matchThreshold: overrides.matchThreshold,
     intentDenylist: overrides.intentDenylist,
   });
@@ -115,6 +128,11 @@ async function startTestServer(overrides = {}) {
     db,
     metaClient,
     baseUrl,
+    // Only set when `enableDbProducts: true` was passed -- lets a test
+    // create/deactivate products against the exact same DB the running app
+    // instance is wired to, without constructing a second, disconnected
+    // repo instance itself.
+    productsRepo,
     async close() {
       await new Promise((resolve) => server.close(resolve));
       db.close();

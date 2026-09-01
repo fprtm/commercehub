@@ -11,6 +11,8 @@ const { createInboundMessageProcessor } = require('./services/inboundMessageProc
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
 const { createSettingsRepo } = require('./services/settingsRepo');
+const { createProductsRepo } = require('./services/productsRepo');
+const { seedProductsFromJsonIfEmpty } = require('./services/productsSeed');
 const { loadQuestionsConfig } = require('./services/questionsLoader');
 const { loadProductsConfig } = require('./services/productsLoader');
 const { DEFAULT_MATCH_THRESHOLD } = require('./services/productMatcher');
@@ -100,6 +102,23 @@ function main() {
   } = loadProductsConfig();
   const matchThreshold = resolveMatchThreshold(configuredMatchThreshold);
 
+  // FR-702 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
+  // the database is the Product catalog's source of truth from here on.
+  // `productsRepo` below is the ONE instance used for both the /products
+  // dashboard CRUD routes (via createApp) and live fuzzy-matching (via
+  // inboundMessageProcessor.js, constructed fresh per message -- see that
+  // file's doc comment). `productsConfig` (just loaded above from
+  // config/products.json) is used for exactly one more thing after this:
+  // seeding this table the very first time it's empty (NFR-703:
+  // idempotent -- seedProductsFromJsonIfEmpty() is a no-op on every boot
+  // after the first). It is deliberately NOT forwarded into createApp()'s
+  // `productsConfig`/`products` wiring below -- doing so would leave a
+  // second, stale read-path for matching, contradicting FR-702's
+  // acceptance criterion that editing config/products.json post-seed has
+  // zero effect.
+  const productsRepo = createProductsRepo(db);
+  seedProductsFromJsonIfEmpty({ productsRepo, products: productsConfig });
+
   let metaClient;
   let baileysConnector = null;
 
@@ -128,7 +147,9 @@ function main() {
       markAsRead: (to, messageId) => baileysConnector.markAsRead(to, messageId),
       sendTypingIndicator: (to, messageId) => baileysConnector.sendTypingIndicator(to, messageId),
       settingsRepo,
-      products: productsConfig,
+      // FR-702: DB-backed, same `productsRepo` instance seeded/constructed
+      // above (against the same `db` file) -- not the config-file array.
+      productsRepo,
       matchThreshold,
       intentDenylist,
     });
@@ -153,7 +174,11 @@ function main() {
     ownerPassword: process.env.OWNER_PASSWORD,
     whatsappMode: WHATSAPP_MODE,
     baileysConnector,
-    productsConfig,
+    // FR-702: DB-backed matching + the /products CRUD routes both read/
+    // write this same instance -- config/products.json's own `products`
+    // array is intentionally NOT passed here anymore (see the comment
+    // above `productsRepo`'s construction).
+    productsRepo,
     matchThreshold,
     intentDenylist,
   });
@@ -163,7 +188,10 @@ function main() {
       port,
       dbPath: resolvedDbPath,
       whatsappMode: WHATSAPP_MODE,
-      productCount: productsConfig.length,
+      // FR-702: reflects the live DB catalog (active + deactivated), not
+      // config/products.json's array -- that file is seed-only from here on.
+      productCount: productsRepo.listAll().length,
+      activeProductCount: productsRepo.listActive().length,
       matchThreshold,
       intentDenylistCount: intentDenylist.length,
     });
