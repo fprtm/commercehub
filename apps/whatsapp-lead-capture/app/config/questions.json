@@ -1,0 +1,17 @@
+{
+  "businessName": "Rimba Apparel",
+  "acknowledgment": "This is an automated reply from Rimba Apparel. Thanks for messaging us! We've received your message and will follow up personally. First, a couple of quick questions so we can help you faster:",
+  "questions": [
+    {
+      "id": "q1",
+      "text": "Which product are you interested in? (e.g. product name or the post you saw)"
+    },
+    {
+      "id": "q2",
+      "text": "What size are you looking for, or how would you prefer we contact you (WhatsApp / call)?"
+    }
+  ],
+  "fallbackMessage": "Thanks for your message — a team member will follow up with you shortly.",
+  "completionMessage": "Thanks! We've got what we need — a team member will follow up with you shortly.",
+  "retryPrefix": "Sorry, I didn't quite catch that. "
+}

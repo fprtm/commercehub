@@ -1,0 +1,73 @@
+'use strict';
+
+const express = require('express');
+const session = require('express-session');
+const path = require('path');
+
+const { createHealthRouter } = require('./routes/health');
+const { createWebhookRouter } = require('./routes/webhook');
+const { createAuthRouter } = require('./routes/auth');
+const { createLeadsRouter } = require('./routes/leads');
+const { createLeadsRepo } = require('./services/leadsRepo');
+const { createFailedEventsRepo } = require('./services/failedEventsRepo');
+
+/**
+ * Builds a fully-wired Express app from injected dependencies. Kept as a
+ * factory (rather than a module-level app singleton) so tests can supply an
+ * in-memory DB and a mock Meta client instead of the real ones -- see
+ * tests/*.test.js.
+ *
+ * @param {object} deps
+ * @param {import('better-sqlite3').Database} deps.db
+ * @param {ReturnType<typeof import('./services/metaClient').createMetaClient>} deps.metaClient
+ * @param {object} deps.questionsConfig
+ * @param {string} deps.verifyToken
+ * @param {string|undefined} deps.appSecret
+ * @param {string} deps.sessionSecret
+ * @param {string} deps.ownerUsername
+ * @param {string} deps.ownerPassword
+ */
+function createApp(deps) {
+  const { db, metaClient, questionsConfig, verifyToken, appSecret, sessionSecret, ownerUsername, ownerPassword } = deps;
+
+  const leadsRepo = createLeadsRepo(db);
+  const failedEventsRepo = createFailedEventsRepo(db);
+
+  const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', path.join(__dirname, 'views'));
+  // Disable etag/x-powered-by noise; this is a small internal dashboard,
+  // not a public API that needs caching negotiation.
+  app.disable('x-powered-by');
+
+  app.use(
+    session({
+      secret: sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: { httpOnly: true, sameSite: 'lax' },
+    }),
+  );
+
+  app.use(createHealthRouter());
+  app.use(createWebhookRouter({ leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret }));
+  app.use(createAuthRouter({ ownerUsername, ownerPassword }));
+  app.use(createLeadsRouter({ leadsRepo }));
+
+  app.get('/', (req, res) => res.redirect('/leads'));
+
+  // Fallback error handler for anything not already caught by the
+  // webhook route's own error handler (e.g. an error thrown in the
+  // dashboard routes). Dashboard errors are surfaced normally (not
+  // swallowed to 200) -- TD-004's "always 200" rule is specific to the
+  // Meta webhook, not the owner-facing dashboard.
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, next) => {
+    console.error(err);
+    res.status(500).send('Something went wrong.');
+  });
+
+  return app;
+}
+
+module.exports = { createApp };
