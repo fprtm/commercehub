@@ -1,8 +1,9 @@
 'use strict';
 
-const { decideNextAction } = require('./stateMachine');
+const { decideNextAction, ACTIONS } = require('./stateMachine');
 const { log } = require('../utils/logger');
 const { sendWithHumanizedTiming } = require('../lib/humanizedTiming');
+const { matchProduct } = require('./productMatcher');
 
 /**
  * The shared inbound-message contract (FR-302 of
@@ -59,6 +60,30 @@ const { sendWithHumanizedTiming } = require('../lib/humanizedTiming');
  *   typing-indicator refresh fires -- is deterministic instead of
  *   depending on which side of the ~20s refresh threshold real jitter
  *   happens to land on for a given message length.
+ * @param {Array<{name: string, aliases?: string[]}>} [deps.products] -
+ *   FR-502..FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
+ *   the Product catalog (see src/services/productsLoader.js) fuzzy-matched
+ *   against a Q1 answer the moment it's accepted. Deliberately left
+ *   `undefined` by default (rather than defaulting to `[]`) -- same
+ *   additive-parameter pattern as `settingsRepo`/`markAsRead` above -- so
+ *   the many pre-existing callers/tests that construct this processor
+ *   without it keep exercising the exact pre-fuzzy-matching behavior
+ *   (Q2 always sent on a usable Q1 answer), completely unmodified
+ *   (NFR-502). Matching only activates when this is explicitly provided
+ *   (an empty array `[]` counts as "provided" and activates matching --
+ *   see productMatcher.js for why an empty catalog then safely always
+ *   resolves to "no match"/needs_review rather than crashing).
+ * @param {number} [deps.matchThreshold] - forwarded straight into
+ *   productMatcher.js's `matchProduct` (defaults to
+ *   productMatcher.js's DEFAULT_MATCH_THRESHOLD when omitted).
+ * @param {string[]} [deps.intentDenylist] - forwarded straight into
+ *   productMatcher.js's `matchProduct` (defaults to
+ *   productMatcher.js's DEFAULT_INTENT_DENYLIST when omitted). Post-review
+ *   fix (Critical finding): independent safety net that forces
+ *   needs_review whenever the customer's text contains a complaint/
+ *   intent-shifting word (e.g. "refund", "rusak"), regardless of the
+ *   token-similarity score -- see productMatcher.js's doc comment for why
+ *   this is necessary in addition to (not instead of) the scoring fix.
  */
 function createInboundMessageProcessor({
   leadsRepo,
@@ -69,6 +94,9 @@ function createInboundMessageProcessor({
   sendTypingIndicator,
   sleep,
   random,
+  products,
+  matchThreshold,
+  intentDenylist,
 }) {
   return {
     /**
@@ -122,6 +150,46 @@ function createInboundMessageProcessor({
         lead = leadsRepo.saveAnswers(lead.id, decision.leadPatch);
       }
 
+      // FR-502..FR-504: the instant a Q1 answer is accepted, fuzzy-match it
+      // against the Product catalog (see src/services/productMatcher.js).
+      // Gated on `Array.isArray(products)` rather than truthiness so an
+      // explicitly-empty catalog (`products: []`) still activates matching
+      // -- NFR-502's "empty catalog -> always no match -> needs_review,
+      // never a crash" case -- while an *omitted* `products` dependency
+      // (every pre-existing caller/test) leaves this whole block inert,
+      // preserving today's unmodified behavior (see the constructor's doc
+      // comment above).
+      //
+      // This intentionally never touches the state machine's own
+      // question1_answer/retry/fallback bookkeeping (already committed
+      // above, unconditionally) -- Settled Decision #3 in the change doc:
+      // "no fallback/retry triggered by this alone." The ONLY two things a
+      // low-confidence/no match changes are (a) `matched_product`/
+      // `needs_review` on the Lead row, for the dashboard, and (b)
+      // suppressing this turn's would-be Q2 prompt reply -- the customer's
+      // raw answer is still saved and visible, and the very next message
+      // they send is handled completely normally by the (unmodified)
+      // state machine.
+      let replies = decision.replies;
+      if (decision.action === ACTIONS.ANSWER_Q1 && lead && Array.isArray(products)) {
+        const matchResult = matchProduct(messageBody, products, { threshold: matchThreshold, intentDenylist });
+        if (matchResult.matched) {
+          // FR-503: above threshold, today's flow proceeds completely
+          // unchanged (`replies` is left as-is, so Q2 still gets sent) --
+          // the only addition is recording the matched product name.
+          lead = leadsRepo.updateProductMatch(lead.id, {
+            matchedProduct: matchResult.product.name,
+            needsReview: false,
+          });
+        } else {
+          // FR-504: below threshold (including "no match found" -- score
+          // 0, or the empty-catalog case above) -- suppress this turn's Q2
+          // prompt and flag the lead for manual review.
+          lead = leadsRepo.updateProductMatch(lead.id, { matchedProduct: null, needsReview: true });
+          replies = [];
+        }
+      }
+
       // FR-402/NFR-401: read fresh on every call, no caching -- a toggle
       // flipped between two inbound messages (or by a concurrent dashboard
       // request) is picked up on the very next message, never stale.
@@ -156,7 +224,7 @@ function createInboundMessageProcessor({
         // delay -- only the already-fired markAsRead is a no-op there.
         if (markAsRead) await markAsRead(phoneNumber, messageId);
 
-        for (const replyText of decision.replies) {
+        for (const replyText of replies) {
           // eslint-disable-next-line no-await-in-loop -- messages must go out in this exact order
           await sendWithHumanizedTiming({
             messageText: replyText,
@@ -184,9 +252,15 @@ function createInboundMessageProcessor({
         action: decision.action,
         autoReplyEnabled,
         reason: decision.reason,
+        needsReview: lead?.needs_review === 1,
       });
 
-      return { lead, decision };
+      // `replies` (rather than the state machine's original decision.replies)
+      // is returned here so callers/tests observe what was actually sent --
+      // identical to decision.replies for every action except a
+      // below-threshold ANSWER_Q1 (FR-504), where the Q2 prompt was
+      // suppressed above.
+      return { lead, decision: { ...decision, replies } };
     },
   };
 }

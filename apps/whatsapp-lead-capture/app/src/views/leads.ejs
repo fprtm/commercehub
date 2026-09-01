@@ -22,8 +22,10 @@
     .badge-responded { background: #eaf7ea; color: #1e7d1e; }
     .badge-closed { background: #eee; color: #666; }
     .badge-new-indicator { background: #ffe4e4; color: #b3261e; margin-left: 0.4rem; }
+    .badge-needs-review { background: #fff0d6; color: #8a5300; margin-left: 0.4rem; }
     .answer { color: #444; }
     .answer.empty { color: #999; font-style: italic; }
+    .matched-product { display: block; margin-top: 0.3rem; font-size: 0.82rem; color: #1e7d1e; }
     .actions form { display: inline-block; margin-right: 0.4rem; }
     .actions button { padding: 0.35rem 0.7rem; font-size: 0.82rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
     .actions button:hover { background: #f0f0f0; }
@@ -85,6 +87,9 @@
               <td><%= new Date(lead.first_message_at).toLocaleString() %></td>
               <td class="answer <%= lead.question1_answer ? '' : 'empty' %>">
                 <%= lead.question1_answer || 'No answer yet' %>
+                <% if (lead.matched_product) { %>
+                  <span class="matched-product">Matched product: <%= lead.matched_product %></span>
+                <% } %>
               </td>
               <td class="answer <%= lead.question2_answer ? '' : 'empty' %>">
                 <%= lead.question2_answer || 'No answer yet' %>
@@ -93,6 +98,9 @@
                 <span class="badge badge-<%= lead.status %>"><%= lead.status %></span>
                 <% if (lead.status === 'new') { %>
                   <span class="badge badge-new-indicator">New — needs review</span>
+                <% } %>
+                <% if (lead.needs_review) { %>
+                  <span class="badge badge-needs-review">Needs review — unmatched product</span>
                 <% } %>
               </td>
               <td class="actions">

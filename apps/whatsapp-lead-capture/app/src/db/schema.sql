@@ -18,6 +18,16 @@ CREATE TABLE IF NOT EXISTS leads (
   -- already retried once" has to be persisted somewhere. Resets to 0
   -- whenever a question is newly answered/pending.
   retry_count INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+  -- Added for docs/sdd/changes/2026-09-01-fuzzy-product-matching.md
+  -- (FR-502..FR-504). `matched_product` is the Product catalog name the
+  -- customer's question1_answer was fuzzy-matched against (NULL when no
+  -- match was found/attempted -- see src/services/productMatcher.js).
+  -- `needs_review` flags a low-confidence-or-no-match Q1 answer for the
+  -- dashboard so the owner can interpret it manually (FR-504); it is a
+  -- separate flag rather than a new `status` value so it composes with
+  -- the existing new/responded/closed lifecycle instead of replacing it.
+  matched_product TEXT,
+  needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

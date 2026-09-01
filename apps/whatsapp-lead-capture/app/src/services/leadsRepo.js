@@ -27,6 +27,20 @@ function createLeadsRepo(db) {
   const updateStatus = db.prepare(`
     UPDATE leads SET status = @status, updated_at = @updated_at WHERE id = @id
   `);
+  // FR-503/FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
+  // a separate, narrowly-scoped UPDATE from updateAnswers() above --
+  // deliberately does NOT touch question1_answer/question2_answer/
+  // fallback_triggered/retry_count, so it can be called independently
+  // (right after a Q1 answer is fuzzy-matched, in
+  // inboundMessageProcessor.js) without any risk of clobbering those
+  // fields or needing to know their current values first.
+  const updateProductMatch = db.prepare(`
+    UPDATE leads
+    SET matched_product = @matched_product,
+        needs_review = @needs_review,
+        updated_at = @updated_at
+    WHERE id = @id
+  `);
 
   return {
     /**
@@ -76,6 +90,25 @@ function createLeadsRepo(db) {
         // a retry count forward -- e.g. moving on to a newly-pending
         // question always starts that question's retry allowance fresh.
         retry_count: retryCount || 0,
+        updated_at: new Date().toISOString(),
+      });
+      return findById.get(id);
+    },
+
+    /**
+     * FR-503/FR-504: records the outcome of fuzzy-matching a Lead's
+     * question1_answer against the Product catalog (see
+     * src/services/productMatcher.js). Called at most once per Q1 answer,
+     * from inboundMessageProcessor.js, right after that answer is saved.
+     *
+     * @param {number} id
+     * @param {{ matchedProduct: string|null, needsReview: boolean }} params
+     */
+    updateProductMatch(id, { matchedProduct, needsReview }) {
+      updateProductMatch.run({
+        id,
+        matched_product: matchedProduct || null,
+        needs_review: needsReview ? 1 : 0,
         updated_at: new Date().toISOString(),
       });
       return findById.get(id);

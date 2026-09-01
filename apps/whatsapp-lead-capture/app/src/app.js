@@ -39,6 +39,20 @@ const { createSettingsRepo } = require('./services/settingsRepo');
  *   `.start()` on it -- that's src/server.js's job, same pattern as
  *   metaClient already being constructed outside createApp() and injected
  *   in.
+ * @param {Array<{name: string, aliases?: string[]}>} [deps.productsConfig]
+ *   - FR-501..FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
+ *   the loaded Product catalog (see src/services/productsLoader.js),
+ *   forwarded into the webhook route's inboundMessageProcessor wiring.
+ *   Left `undefined` by default -- same additive-parameter pattern as
+ *   `sleep`/`random` below -- so every pre-existing caller of createApp()
+ *   (including all 128 tests predating this change) keeps exercising
+ *   fuzzy-matching as a complete no-op, exactly as if this change didn't
+ *   exist (NFR-502). `src/server.js` is the one production caller that
+ *   always passes a real (possibly empty) array here.
+ * @param {number} [deps.matchThreshold] - forwarded straight through, same
+ *   reasoning as `productsConfig` above.
+ * @param {string[]} [deps.intentDenylist] - forwarded straight through,
+ *   same reasoning as `productsConfig` above (post-review Critical fix).
  */
 function createApp(deps) {
   const {
@@ -62,6 +76,9 @@ function createApp(deps) {
     // jitter (post-review fix).
     sleep,
     random,
+    productsConfig,
+    matchThreshold,
+    intentDenylist,
   } = deps;
 
   const leadsRepo = createLeadsRepo(db);
@@ -104,6 +121,9 @@ function createApp(deps) {
       settingsRepo,
       sleep,
       random,
+      products: productsConfig,
+      matchThreshold,
+      intentDenylist,
     }),
   );
   app.use(createAuthRouter({ ownerUsername, ownerPassword }));

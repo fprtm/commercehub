@@ -12,7 +12,26 @@ const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
 const { createSettingsRepo } = require('./services/settingsRepo');
 const { loadQuestionsConfig } = require('./services/questionsLoader');
+const { loadProductsConfig } = require('./services/productsLoader');
+const { DEFAULT_MATCH_THRESHOLD } = require('./services/productMatcher');
 const { log } = require('./utils/logger');
+
+// FR-501..FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
+// PRODUCT_MATCH_THRESHOLD env var takes precedence over
+// config/products.json's own "matchThreshold" field, which in turn takes
+// precedence over productMatcher.js's coded DEFAULT_MATCH_THRESHOLD --
+// same override-chain shape as every other configurable knob in this app
+// (env var for ops-time tuning, config file for the business-facing
+// default, code constant as the last-resort fallback).
+function resolveMatchThreshold(configuredThreshold) {
+  const envValue = process.env.PRODUCT_MATCH_THRESHOLD;
+  if (envValue !== undefined && envValue !== '') {
+    const parsed = Number(envValue);
+    if (Number.isFinite(parsed)) return parsed;
+    console.error(`Invalid PRODUCT_MATCH_THRESHOLD "${envValue}" -- must be a number. Falling back to the config/coded default.`);
+  }
+  return typeof configuredThreshold === 'number' ? configuredThreshold : DEFAULT_MATCH_THRESHOLD;
+}
 
 // FR-301: mode is chosen at boot via env var, not switchable at runtime.
 const WHATSAPP_MODE = (process.env.WHATSAPP_MODE || 'cloud_api').trim();
@@ -74,6 +93,12 @@ function main() {
 
   const db = createDb(resolvedDbPath);
   const questionsConfig = loadQuestionsConfig();
+  const {
+    products: productsConfig,
+    matchThreshold: configuredMatchThreshold,
+    intentDenylist,
+  } = loadProductsConfig();
+  const matchThreshold = resolveMatchThreshold(configuredMatchThreshold);
 
   let metaClient;
   let baileysConnector = null;
@@ -103,6 +128,9 @@ function main() {
       markAsRead: (to, messageId) => baileysConnector.markAsRead(to, messageId),
       sendTypingIndicator: (to, messageId) => baileysConnector.sendTypingIndicator(to, messageId),
       settingsRepo,
+      products: productsConfig,
+      matchThreshold,
+      intentDenylist,
     });
 
     baileysConnector = createBaileysConnector({ authDir, processInboundMessage, failedEventsRepo });
@@ -125,10 +153,20 @@ function main() {
     ownerPassword: process.env.OWNER_PASSWORD,
     whatsappMode: WHATSAPP_MODE,
     baileysConnector,
+    productsConfig,
+    matchThreshold,
+    intentDenylist,
   });
 
   app.listen(port, () => {
-    log('server_started', { port, dbPath: resolvedDbPath, whatsappMode: WHATSAPP_MODE });
+    log('server_started', {
+      port,
+      dbPath: resolvedDbPath,
+      whatsappMode: WHATSAPP_MODE,
+      productCount: productsConfig.length,
+      matchThreshold,
+      intentDenylistCount: intentDenylist.length,
+    });
     console.log(`WhatsApp Lead Capture running on http://localhost:${port} (mode: ${WHATSAPP_MODE})`);
     if (WHATSAPP_MODE === 'baileys') {
       console.log(`Baileys mode active -- open http://localhost:${port}/whatsapp/pair (after logging in) to pair.`);

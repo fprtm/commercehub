@@ -63,6 +63,7 @@ npm start         # starts the server (default http://localhost:3000)
 | `WHATSAPP_PHONE_NUMBER_ID` | *(cloud_api mode only)* The "Phone Number ID" (not the phone number) from the Meta App dashboard's WhatsApp > API Setup screen. |
 | `WHATSAPP_APP_SECRET` | *(cloud_api mode only, required in that mode)* — App Secret from the Meta App dashboard, used to verify the `X-Hub-Signature-256` header on inbound webhook requests. **Not in the original task brief's env var list** — added because the technical design (Phase L / Data Flow) explicitly requires signature verification; see "Judgment calls" below. The server (`src/server.js`) refuses to start without it in cloud_api mode, so signature verification is never silently optional in a deployed build. (The underlying `createApp()` factory still accepts an unset `appSecret` for tests that construct the app directly without going through `server.js`.) |
 | `BAILEYS_AUTH_DIR` | *(baileys mode only)* Folder for the paired-session credentials (default `./data/baileys-auth`). Local/gitignored — see "Dual WhatsApp mode" below. |
+| `PRODUCT_MATCH_THRESHOLD` | *(optional)* Overrides the fuzzy product-matching confidence threshold (0–1 scale; see "Fuzzy product matching" below). Falls back to `config/products.json`'s own `matchThreshold` field, then to a coded default of `0.65`. |
 | `SESSION_SECRET` | Secret used to sign the dashboard's session cookie. |
 | `OWNER_USERNAME` / `OWNER_PASSWORD` | Single-owner dashboard login credentials (no user table — see technical design's Authentication Strategy). |
 | `DATABASE_PATH` | Path to the SQLite file (default `./data/leads.db`). |
@@ -79,8 +80,107 @@ dependency) against everything in `tests/`. All tests run against an
 socket** — nothing touches a real network, a real Meta account, or a real
 WhatsApp number/QR scan anywhere in the suite.
 
-Current result: **128 passed, 0 failed** — 100 pre-existing **plus 28 added
-for the humanized-timing module and its post-review fixes**:
+Current result: **182 passed, 0 failed** — 128 pre-existing, **plus 26
+added for the first version of fuzzy product matching**, **plus 19 more
+added for a first independent adversarial review's fixes**, **plus 9 more
+added for a second independent review's retuning fixes** (all
+FR-501..FR-504, `docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`;
+see "Independent adversarial review findings" and "Second independent
+review" below for what each batch fixes):
+
+- `tests/productMatcher.test.js` — 29 tests for the matching algorithm in
+  isolation. The original 12: an exact product-name match scores high;
+  several stemmed/inflected variants ("kaosnya ada?", "membeli kaos",
+  "dibeli kaos nya") all match the same product via Indonesian stemming; a
+  specific full-name mention resolves to the specific product rather than
+  tying on a generic alias; unrelated text ("toko buka jam berapa?",
+  off-topic questions) scores low/no-match; a minor typo ("kaus" for
+  "kaos") still matches via Jaro-Winkler tolerance; an empty/undefined
+  catalog and empty/null customer text are always handled safely
+  (NFR-502); the configurable threshold changes the match/no-match outcome
+  for a borderline score. 9 more from the first adversarial review: the
+  reviewer's own exact refund/rusak/komplain adversarial sentences now
+  resolve to `needs_review` (both via the length-penalized score alone,
+  and independently via the intent denylist); the denylist does NOT fire
+  on ordinary product questions; a stemmed inflection of a denylist word
+  ("dirusak") is still caught; a bare alias shared by two products
+  resolves to `needs_review` (ambiguous), a clear score gap does not, and
+  the ambiguity margin is configurable. 8 more from the second review's
+  retuning: 4 realistic longer purchase questions (with filler/politeness
+  words) now correctly match; the original 3 adversarial examples still
+  correctly reject after retuning; 3 brand-new adversarial examples from
+  the second review (a store-hours question mentioning "jaket" in
+  passing, an order-status complaint using non-denylist words, a
+  size-exchange request) also correctly reject; naming the full product
+  then complaining is still caught by the denylist; and — the Secondary
+  finding's fix — "pas" (and other common short words) no longer
+  spuriously trips the intent denylist, in isolation and in a realistic
+  sentence, while typo tolerance for longer denylist words is preserved.
+- `tests/productsLoader.test.js` — 13 tests for loading/validating
+  `config/products.json` (FR-501). The original 7: loads the real shipped
+  file, a swapped fixture file changes the catalog with no code change, a
+  missing file resolves to an empty catalog (not a crash — NFR-502),
+  aliases are optional, and malformed entries (missing name, non-array
+  aliases) are rejected. 6 more from the first adversarial review: the
+  intent denylist always includes the coded defaults (with or without
+  a config file), a client can extend it via `products.json` (unioned
+  with, not replacing, the defaults), a non-array `intentDenylist` is
+  rejected, and — the Medium finding's catalog-validation fix — a
+  duplicate alias/name shared across two different products logs a
+  warning at load time (and a catalog with no duplicates does not).
+- `tests/productMatching.test.js` — 12 tests proving the wiring into
+  `inboundMessageProcessor.js` and the dashboard. The original 7: a
+  high-confidence match proceeds through Q2 completely unchanged and
+  stores the matched product (FR-503); a low-confidence/unrelated answer
+  suppresses the Q2 prompt and flags `needs_review` without touching
+  fallback/retry (FR-504, Settled Decision #3); an explicitly-empty
+  catalog always resolves to `needs_review` with no crash (NFR-502);
+  *omitting* the `products` dependency entirely (every pre-existing test)
+  leaves matching a complete no-op; the read receipt still fires even when
+  the scripted reply is suppressed; and two end-to-end tests over the real
+  `POST /webhook` route plus `GET /leads` proving the matched product name
+  and the "Needs review" badge actually render on the dashboard. 4 more
+  from the first adversarial review, all proven through the *real*
+  processor/HTTP stack (not just `productMatcher.js` in isolation): a
+  refund complaint does NOT get the tone-deaf Q2 "what size?" auto-reply
+  and IS flagged `needs_review`; naming the full product then complaining
+  is still caught (proving the denylist matters even when the scoring fix
+  alone would have let it through); two products sharing a generic alias
+  resolve to `needs_review` over the real processor; and an end-to-end
+  HTTP + dashboard test confirms a refund complaint shows "Needs review"
+  with the raw text, never a false "Matched product". 1 more from the
+  second review: a realistic longer purchase question with filler words
+  still gets Q2 and a matched product over the real processor, not
+  `needs_review`.
+
+**All 128 pre-existing tests pass completely unmodified (NFR-502)** — not
+one existing test file's assertions were touched, across any round of
+this change. This was possible by design: `products` is an additive,
+opt-in dependency on `createInboundMessageProcessor`/`createApp`/
+`createWebhookRouter`/`startTestServer` (same pattern as
+`settingsRepo`/`sleep`/`random` before it) that is left `undefined` unless
+a caller explicitly passes it — every pre-existing test constructs the
+processor/app without it, so fuzzy matching never activates for them and
+today's behavior (Q2 always sent on a usable Q1 answer) is exercised
+exactly as before. In production (`src/server.js`), the catalog is always
+loaded and passed in for real — see "Fuzzy product matching" below. Two of
+the 26 first-round fuzzy-matching tests *did* need their own expectations
+revised during the first adversarial review's fixes (not touched, but not
+"pre-existing" either — they were added in this same change, not part of
+the frozen 128): the length penalty was, at that point, intentionally more
+conservative about longer messages diluted with filler words, so one
+inflected-variant example (`"mau beli kaos dong"` → `"mau beli kaos"`) and
+one borderline-threshold example (a custom threshold of `0.4` → `0.2`, to
+match the then-lower score for the same deliberately-partial input) were
+adjusted to reflect that scoring. The second review's retuning (raising
+`FREE_UNACCOUNTED_TOKENS_PER_MATCH` back up from 2 to 5) required **zero**
+further test-expectation changes to any of those files — every existing
+assertion in `tests/productMatcher.test.js`, `tests/productsLoader.test.js`,
+and `tests/productMatching.test.js` still held after retuning; only new
+tests were added.
+
+Prior to this change: **128 passed, 0 failed** — 100 pre-existing plus 28
+added for the humanized-timing module and its post-review fixes:
 - `tests/humanizedTiming.test.js` — 10 tests exercising the module in
   isolation with mocked callbacks and a fake `sleep`, no real waiting.
 - `tests/baileysConnector.test.js` — 7 new tests for its `markAsRead`/
@@ -312,6 +412,378 @@ Edit `config/questions.json` — no code change required:
 The file must define exactly 2 questions (per FR-002's "up to 2 sequential
 qualifying questions") and is re-read on every server start.
 
+## Fuzzy product matching (FR-501..FR-504)
+
+`docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`. Every customer's
+answer to Q1 ("Which product are you interested in?") is now fuzzy-matched
+against a configured Product catalog, using **classical NLP only** —
+Indonesian stemming + string similarity, **deliberately not an LLM** (see
+"What this is not", below).
+
+- **Above the confidence threshold** — today's flow proceeds completely
+  unchanged: Q2 is asked as normal, and the matched product's name is
+  saved on the Lead and shown on the dashboard (`Matched product: ...`
+  under the Q1 answer).
+- **Below the threshold** (including a product-less catalog, or genuinely
+  unrelated text like "toko buka jam berapa?") — the Q2 prompt for that
+  turn is **suppressed** (the customer gets no further automated message
+  for it — see "What doesn't change" below), and the Lead is flagged with
+  a **"Needs review — unmatched product"** badge on the dashboard, right
+  next to the raw `question1_answer` text, so the owner can read what the
+  customer actually wrote and follow up manually.
+
+### Configuring the product catalog (FR-501)
+
+Edit `config/products.json` — no code change required, re-read on every
+server start (same pattern as `config/questions.json` above):
+
+```json
+{
+  "matchThreshold": 0.65,
+  "products": [
+    { "name": "Kaos Rimba Navy", "aliases": ["kaos navy", "kaos", "baju kaos"] },
+    { "name": "Kaos Rimba Hitam", "aliases": ["kaos hitam"] },
+    { "name": "Celana Rimba Cargo", "aliases": ["celana cargo", "celana"] },
+    { "name": "Jaket Rimba Outdoor", "aliases": ["jaket", "jaket outdoor"] }
+  ],
+  "intentDenylist": ["nyesel", "bocor halus"]
+}
+```
+
+Each product is intentionally lightweight: just a `name` and an optional
+list of `aliases` (Settled Decision #2 in the change doc) — **not**
+Project 3's full inventory model (no SKU, stock quantity, low-stock
+threshold, active flag). This project has no inventory concept at all;
+adding one was explicitly out of scope.
+
+The optional top-level `"intentDenylist"` array lets the owner add their
+own complaint/intent-shifting vocabulary — it's **unioned with** (not a
+replacement for) the built-in defaults in
+`src/services/productMatcher.js` (`refund`, `rusak`, `komplain`, `retur`,
+`garansi`, `cacat`, `kecewa`, `robek`, `sobek`, and more — see
+"Independent adversarial review findings" below for the full list and why
+it exists), so a real client can extend it without a code change but can't
+accidentally remove the safety floor.
+
+**Aliases matter more than they look.** A generic one-word alias (e.g.
+`"kaos"` on "Kaos Rimba Navy") is what lets a short, vague customer
+message like "kaosnya ada?" or "membeli kaos" match at all — a customer
+rarely types a product's full catalog name. Without at least one short,
+natural alias per product, only messages that closely echo the full name
+will match; everything else falls to `needs_review`. This is a deliberate,
+documented trade-off, not a bug: a business owner who wants better
+coverage adds more aliases (the actual words their customers tend to use),
+same spirit as tuning `config/questions.json`'s wording.
+
+An empty or missing `products.json` is not an error — every Q1 answer
+just falls through to `needs_review` until the owner adds products (see
+NFR-502 below).
+
+### The matching algorithm (FR-502) and why 0.65
+
+Implemented in `src/services/productMatcher.js` — full reasoning is in
+that file's doc comment; summarized here:
+
+1. Both the customer's text and every product name/alias are lowercased,
+   tokenized, and run through the **Sastrawi Indonesian stemmer**
+   (`sastrawijs`) — this is what makes "membeli kaos" ("buying a shirt"),
+   "dibeli kaos nya" ("[shirt] is bought"), and "kaosnya ada?" ("is there
+   a shirt?") all reduce to the same root token `kaos`, regardless of
+   which Indonesian prefix/suffix inflection the customer typed.
+2. Each candidate (a product's name, and separately each alias) is scored
+   by how many of ITS tokens have a close match (**Jaro-Winkler
+   similarity** ≥ 0.85, via the `natural` package) somewhere in the
+   customer's stemmed text — chosen over plain Levenshtein because
+   Jaro-Winkler is already normalized to a 0–1 confidence score and
+   weights prefix matches more heavily, which suits short tokens with a
+   typo near the end (a common one/two-thumb phone-typing pattern, e.g.
+   "kaus" for "kaos"). TF-IDF (also mentioned as an option in the change
+   doc) was considered and not used — it's built for weighting terms
+   across a large document corpus, the wrong tool for a small,
+   fully-enumerable product list matched one message at a time.
+3. **Length penalty (post-review fix — see "Independent adversarial review
+   findings" below).** The raw `candidateCoverage * averageSimilarity`
+   score from step 2 is then multiplied by a penalty based on how many of
+   the CUSTOMER's OWN tokens the match leaves unaccounted for, beyond a
+   small free allowance that scales with how much evidence actually
+   matched. This is what stops a single product word buried in an
+   otherwise-unrelated (and often complaint-shaped) sentence from scoring
+   a false 1.0.
+4. A product's overall score is the best score across its name + all its
+   aliases, with ties broken toward whichever candidate matched more
+   tokens (more specific evidence) — so if the catalog has both "Kaos
+   Rimba Navy" (alias `"kaos"`) and "Kaos Rimba Hitam", a message that
+   actually names "Kaos Rimba Hitam" resolves to the Hitam product, not
+   an arbitrary tie-break toward whichever product is listed first.
+5. **Ambiguity margin (post-review fix).** If the top-scoring product and
+   the runner-up are both above threshold and within a small margin of
+   each other (default 0.1), the match is too close to call — resolved as
+   `needs_review`, not silently picked.
+6. **Intent denylist (post-review fix).** Independent of all the scoring
+   above: if the customer's text contains a complaint/intent-shifting word
+   (e.g. "refund", "rusak", "komplain" — see the full list and how to
+   extend it below), the answer is always routed to `needs_review`,
+   regardless of score.
+
+**Default threshold: 0.65** (0–1 scale), configurable via
+`PRODUCT_MATCH_THRESHOLD` (env var) or `products.json`'s own
+`matchThreshold` field, without a code change. In practice the score is
+either exactly 0 (nothing matched at all) or, once at least one real token
+match happens, clusters well above 0.65 for a genuine mention — including
+realistic LONGER purchase questions with filler/politeness words ("min",
+"kak", "dong", "nya", "gak", question words), which score ~1.0 as long as
+the product itself is clearly named somewhere in them (see "Second
+independent review" below for why this needed retuning); 0.65 sits above
+both the "only 1 of 3 words in a long product name happened to match"
+case (~0.33) and the "one product word buried in an unrelated, often
+complaint-shaped sentence" case the length penalty targets (~0.2–0.5 in
+testing), and below every genuine match observed in testing (see
+`tests/productMatcher.test.js` for concrete score examples).
+
+### Independent adversarial review findings (all fixed)
+
+An independent adversarial reviewer of the first version of this feature
+found three real gaps, all now fixed:
+
+**Critical — a product word inside an unrelated (often complaint) message
+scored a false 1.0.** The original scoring formula's denominator was only
+the CANDIDATE's token count (often 1, for a short alias like `"kaos"`) —
+never the customer message's length — so a single matching word anywhere
+in a long sentence scored 1.0 regardless of how much of the sentence went
+unaccounted for. Concretely, `"kaos kemarin yang saya beli robek, bisa
+refund?"` (a refund complaint) used to score **1.0** against "Kaos Rimba
+Navy" and trigger an unmodified, tone-deaf "what size are you looking
+for?" auto-reply, with `needs_review=false` — the dashboard showed it as
+a normal successful match, zero signal to the owner. Fixed with
+**defense in depth, both layers**:
+1. **The length penalty** described in step 3 above — the same message
+   now scores **~0.20** (well below the 0.65 threshold) via the scoring
+   formula alone (see "Second independent review" below for the exact
+   constant, retuned once already since this fix first shipped).
+2. **The intent denylist** (step 6 above, `DEFAULT_INTENT_DENYLIST` in
+   `src/services/productMatcher.js`: `refund`, `rusak`, `komplain`,
+   `retur`, `garansi`, `cacat`, `kecewa`, `robek`, `sobek`, `tipu`,
+   `penipuan`, `palsu`, `keluhan`, `protes`, `kapok`, `gagal`, `error`,
+   `hilang`, `hangus`, `batal`, `nipu`, `bocor`, `patah`, `pecah`) —
+   an **independent, non-scoring safety net**. This second layer is not
+   redundant: `"kaos rimba navy saya rusak parah, refund dong"` (the
+   customer names the product **in full**, then complains) still scores a
+   raw **1.0** — naming the product fully buys back enough of the length
+   penalty's free allowance that scoring alone cannot distinguish "I want
+   to buy this" from "this broke". Only the independent denylist check
+   catches that case. Both layers are exercised directly against these
+   exact adversarial sentences in `tests/productMatcher.test.js` and
+   end-to-end (through the real processor and `POST /webhook` + dashboard)
+   in `tests/productMatching.test.js`.
+   The denylist is extensible without a code change via `products.json`'s
+   optional `"intentDenylist"` array — a real client's own complaint
+   vocabulary is **unioned with** (not a replacement for) the coded
+   defaults, which always stay active as a safety floor. See
+   `src/services/productsLoader.js`.
+
+**Medium — no ambiguity/margin check between top and runner-up.** A bare
+`"kaos"` aliased to two different products used to silently resolve to
+whichever product happened to be listed first in the catalog array,
+reported at full confidence with no indication it was a close call. Fixed
+with the ambiguity margin (step 5 above): both `>= threshold` and within
+0.1 of each other now resolves to `needs_review` instead. Also added:
+`productsLoader.js` now validates the catalog at load time and **logs a
+warning** (`products_config_duplicate_alias_warning`) for any name/alias
+shared by two or more different products — exactly the catalog shape that
+creates this ambiguity, flagged before a real customer message ever hits
+it.
+
+### Second independent review: the Critical fix overcorrected (also fixed)
+
+A *second* independent review verified the Critical fix genuinely worked
+(6 adversarial complaint/refund inputs, including 3 brand-new ones using
+vocabulary not in the denylist, all correctly rejected) — but found the
+length penalty had overcorrected: `FREE_UNACCOUNTED_TOKENS_PER_MATCH = 2`
+was too small an allowance for realistic LONGER legitimate purchase
+questions, which naturally carry several filler/politeness words ("min",
+"kak", "dong", "nya", "gak", question words) that have nothing to do with
+complaint intent. Of 8 ordinary, zero-complaint-intent product questions
+tested, 4 incorrectly scored below 0.65 and got routed to `needs_review`
+— safe-direction (never a wrong auto-reply), but defeating a lot of the
+feature's value if roughly half of normal longer questions get needlessly
+flagged for manual review.
+
+**Fix: `FREE_UNACCOUNTED_TOKENS_PER_MATCH` retuned from 2 to 5**, solved
+as a single shared constant against BOTH example sets together (not one
+at the other's expense — see `src/services/productMatcher.js`'s doc
+comment for the full derivation). Before → after, the reviewer's exact
+examples:
+
+| Input | Should | Before (score) | After (score) |
+|---|---|---|---|
+| `"jaket outdoor nya masih ada gak min, warna apa aja"` | match | 0.33 (wrong) | **1.00** ✓ |
+| `"min, kaos rimba navy nya ada warna lain gak selain navy"` | match | 0.60 (wrong) | **1.00** ✓ |
+| `"permisi kak mau tanya kaos rimba navy nya itu bahannya apa ya, terus available size apa aja"` | match | 0.27 (wrong) | **1.00** ✓ |
+| `"celana cargo nya masih tersedia ga kak, boleh liat foto dan harganya"` | match | 0.25 (wrong) | **1.00** ✓ |
+
+...and the retuned constant re-verified against all 6 adversarial
+complaint/refund examples (the original 3, plus 3 new ones from the
+second review), all still correctly rejected:
+
+| Input | Score | Matched |
+|---|---|---|
+| `"kaos kemarin yang saya beli robek, bisa refund?"` | 0.33 | **false** (denylist also fires) |
+| `"jaket yang saya beli kemarin rusak, minta ganti dong"` | 0.25 | **false** (denylist also fires) |
+| `"celana yang kemarin saya beli robek parah, komplain nih"` | 0.25 | **false** (denylist also fires) |
+| `"toko jaket buka jam berapa ya min?"` (store hours, "jaket" in passing) | 0.50 | **false** |
+| `"pesanan saya kok lama banget, belum nyampe juga sampai sekarang"` (order-status complaint, no denylist words, and no product word at all) | 0.00 | **false** |
+| `"kaos nya mau saya tukar ukuran, bisa gak"` (size exchange) | 0.33 | **false** |
+| `"kaos rimba navy saya rusak parah, refund dong"` (full name + complaint) | 1.00 (by score alone) | **false** — denylist-only catch, exactly as designed |
+
+Why 5 (not some other value) is safe: the adversarial sentences above all
+have exactly ONE matched candidate token (the bare product mention,
+`matchedCount = 1`), while every legitimate longer question above has 2–3
+matched tokens (the product's full name, or a multi-word alias). Because
+the free allowance scales with `matchedCount`, raising it to 5 gives
+long-but-genuine multi-token mentions much more room to carry filler
+words, while single-token bare mentions (the adversarial shape) still hit
+their penalty far sooner — see the module's doc comment for the exact
+inequality this was solved against.
+
+**Secondary — a benign short word ("pas") spuriously tripped the intent
+denylist.** Jaro-Winkler similarity is unreliable on very short strings
+independent of meaning: `"pas"` ("just"/"fits"/"at that moment" — a
+completely ordinary, common word) scored ~0.89 similarity against
+`"palsu"` ("counterfeit"), above the 0.85 fuzzy-match bar, purely because
+both are short. It never flipped a real outcome in testing (the score was
+already low in every case checked), but it was a real risk of a
+misleading "why was this flagged" reason shown to the owner on an
+ordinary message. **Fixed**: `findIntentDenylistHits()` now requires an
+**exact** stemmed match (no Jaro-Winkler fuzziness) whenever the shorter
+of the two words being compared is under `DENYLIST_SHORT_WORD_EXACT_MATCH_LENGTH`
+(5 characters) — fuzzy typo-tolerance (e.g. "rusakk" for "rusak") still
+applies once both words are at least that long. `tests/productMatcher.test.js`
+confirms `"pas"` (and several other common short words: "gak", "dan",
+"apa", "ada", "aja", "kak", "min", "ya") no longer trip the denylist, a
+realistic sentence using "pas" in context is not flagged, and typo
+tolerance for longer denylist words is unaffected.
+
+**Low — the accuracy note only disclosed false negatives.** See "What this
+is not" below, now updated to disclose the false-positive risk too.
+
+### What doesn't change
+
+- **The customer still gets a read receipt.** Per FR-601's contract
+  (see "Humanized response timing" above), `markAsRead` fires
+  unconditionally for every inbound message — fuzzy matching only affects
+  whether the *scripted Q2 reply* goes out, never the read receipt.
+- **The state machine itself (`stateMachine.js`) is completely unmodified**
+  — this feature is a thin overlay in `inboundMessageProcessor.js`, not a
+  change to the qualifying-question flow's core logic. `question1_answer`
+  is still saved exactly as it always was (so the owner sees the raw text
+  either way); a low-confidence match does not trigger the existing
+  retry/fallback logic (Settled Decision #3: "no fallback/retry triggered
+  by this alone") — it only withholds that one turn's Q2 prompt and flags
+  the Lead. The customer's very next message is handled completely
+  normally.
+
+### NFR-502: no regression, and the empty-catalog safe path
+
+`products` is an additive, opt-in dependency (`createInboundMessageProcessor`
+/ `createApp` / `createWebhookRouter`) — left `undefined` unless a caller
+explicitly passes it in, so every one of the 128 pre-existing tests (which
+construct the processor/app without it) keeps exercising the exact
+pre-fuzzy-matching behavior, completely unmodified. In production,
+`src/server.js` always loads and passes in the real (possibly empty)
+catalog. An **explicitly empty** catalog (`products: []`, or a missing
+`products.json`) always resolves to "no match" → `needs_review`, safely —
+never a crash — see `tests/productMatcher.test.js`,
+`tests/productsLoader.test.js`, and `tests/productMatching.test.js` for
+dedicated coverage of exactly this case.
+
+### Judgment calls made for this change
+
+- **Config file, not a dashboard CRUD screen (FR-501).** Project 2/3 build
+  full Product CRUD UIs because they track real inventory (stock levels,
+  SKUs) that changes constantly and needs owner-facing editing at runtime.
+  This project has no inventory concept at all — the catalog is just
+  `{ name, aliases }`, edited as infrequently as `config/questions.json`
+  already is. A config file is proportional; a CRUD screen for two fields
+  would be overengineering relative to this project's established pattern.
+- **`needs_review` is a new boolean column, not a new `status` value.**
+  Keeping it separate from `status` (`new`/`responded`/`closed`) means it
+  composes with the existing lifecycle instead of replacing it — a Lead
+  can be `new` *and* `needs_review` at the same time (the two badges do
+  stack on the dashboard), and the owner's existing "Mark responded"/"Mark
+  closed" actions keep working unchanged regardless of whether the Q1
+  answer matched.
+- **Schema change follows the existing precedent, with the same caveat.**
+  `leads.matched_product`/`leads.needs_review` were added directly to
+  `src/db/schema.sql`'s `CREATE TABLE IF NOT EXISTS leads (...)`, the same
+  way `retry_count` was added for the original build (see "Post-build
+  review fixes" below) — there is no migration framework in this project.
+  This means a **fresh** database (a new `data/leads.db`, e.g. after
+  `npm run migrate` on a clean install) gets the new columns automatically,
+  but an **already-existing** `leads.db` file from before this change
+  would not — its `leads` table was already created, so
+  `CREATE TABLE IF NOT EXISTS` is a no-op against it. Since `data/` is
+  gitignored/local-only and this is a portfolio demo (not a production
+  system with real customer data to preserve), the honest fix for anyone
+  hitting this is to delete the old `data/leads.db` and re-run
+  `npm run migrate` — not a real migration tool, but consistent with how
+  this exact gap was already handled for `retry_count`.
+- **Fuzzy matching only ever touches the ANSWER_Q1 turn.** It is wired
+  into `inboundMessageProcessor.js`, not `stateMachine.js` — the state
+  machine's own header comment already documents that NLP/answer-relevance
+  validation is explicitly out of its scope (structural-only). Keeping
+  fuzzy matching as a layer on top, rather than folding it into the state
+  machine's pure decision function, is what makes it possible to add this
+  entire feature with **zero changes to `stateMachine.js` or its existing
+  tests** (NFR-502).
+
+### What this is not (honest accuracy note)
+
+This is classical NLP (stemming + string similarity), not language
+understanding. It cannot infer intent, resolve pronouns, or truly
+understand a sentence — it can only recognize that some of the customer's
+words are *close to* a configured product name or alias, and (via the
+intent denylist) that certain specific words are present. That cuts both
+ways, and both directions are worth being honest about:
+
+- **False negatives** (a real product question doesn't match anything).
+  A customer who describes a product in a way that shares no close-enough
+  root words with anything in `products.json` (even if a human would
+  obviously know what they meant) will land in `needs_review`, not because
+  something is broken, but because that is the honest limit of this
+  technique. The practical mitigation is the same one
+  `config/questions.json` already relies on: **well-chosen aliases** — the
+  actual words customers tend to use, not just the formal product name.
+- **False positives** (a product word appears in an unrelated, or
+  actively negative, message and gets read as a confident match). This is
+  the more dangerous direction — a bad auto-reply looks worse than no
+  reply — and an earlier version of this feature genuinely had this bug:
+  see "Independent adversarial review findings" above for the exact
+  before/after. Two mitigations are now in place (the length penalty and
+  the intent denylist), and together they catch every adversarial example
+  tested so far, including a full product name mentioned inside a
+  complaint. **Neither mitigation is a complete, provable guarantee.** The
+  length penalty is a statistical heuristic tuned against a specific set
+  of anchor cases, not a formal bound — a sufficiently short, contrived
+  message could still slip past it. The intent denylist only recognizes
+  the specific (stemmed, near-exact) words configured in it — a complaint
+  phrased entirely without any of those words (or their close variants)
+  would not be caught. No classical string-similarity technique, and
+  arguably no matching technique at all short of a human reading every
+  message, eliminates this risk entirely; the goal here was to reduce it
+  from "essentially undefended" to "defended in depth against every
+  concrete case identified so far," not to claim it is now impossible.
+
+This was a deliberate choice, not a shortcut taken due to time constraints:
+an LLM-based matcher is explicitly out of scope for this project (deferred
+to a future "Secondary Niche"/AI-upsell offering) — see the change doc's
+"NEVER FOR THIS PROJECT". A `needs_review` Lead is not a dead end either —
+the owner always sees the customer's exact words and can follow up
+manually, which is the whole point of the non-blocking design (Settled
+Decision #1: "never send a potentially-wrong auto-generated response to
+the customer") — and it's exactly the same non-blocking design that makes
+routing a detected false positive to `needs_review` (rather than trying to
+silently "fix" the reply) the correct, safe response to this bug class too.
+
 ## Dual WhatsApp mode: Cloud API vs. Baileys
 
 This app can talk to WhatsApp two ways, picked once at boot via
@@ -402,12 +874,14 @@ mode):**
 ```
 app/
   config/questions.json       qualifying-question script (NFR-005)
+  config/products.json        Product catalog (name + optional aliases) for fuzzy matching (FR-501)
   src/
     app.js                    Express app factory (dependency-injected: db, connectors, config, mode)
     server.js                 real entrypoint: wires env vars, real DB, mode-selected connector
     db/
       schema.sql               Lead + FailedEvent + app_settings schema (+ FailedEvent.channel for
-                                FR-305; + app_settings single-row table for the auto-reply toggle)
+                                FR-305; + app_settings single-row table for the auto-reply toggle;
+                                + leads.matched_product/needs_review for fuzzy product matching)
       index.js                 DB factory (createDb) — used by server.js and tests alike
       migrate.js                standalone `npm run migrate` script
     lib/
@@ -420,8 +894,15 @@ app/
       inboundMessageProcessor.js  FR-302: shared processInboundMessage() -- the one place both
                                    connectors call into the state machine/Lead repo from (now also
                                    reads settingsRepo fresh on every call to gate the send loop --
-                                   auto-reply toggle change; and now routes every reply through
-                                   lib/humanizedTiming.js instead of sending immediately -- FR-604)
+                                   auto-reply toggle change; now routes every reply through
+                                   lib/humanizedTiming.js instead of sending immediately -- FR-604;
+                                   and now fuzzy-matches a Q1 answer against the Product catalog the
+                                   moment it's accepted, suppressing that turn's Q2 prompt and
+                                   flagging needs_review below threshold -- FR-502..FR-504)
+      productMatcher.js          FR-502..FR-504: the fuzzy-matching algorithm itself (Indonesian
+                                  stemming via sastrawijs + Jaro-Winkler token similarity via
+                                  natural) -- pure function, no DB/network access, fully documented
+                                  reasoning in its own doc comment
       metaClient.js             Meta Graph API client (real interface, mocked in tests); now also
                                  exposes markAsRead/sendTypingIndicator (FR-601/FR-604)
       baileysConnector.js       Baileys adapter: connection lifecycle, reconnect/backoff (FR-304),
@@ -430,7 +911,12 @@ app/
       parseWebhookPayload.js    extracts normalized messages from a raw Meta payload (now also the
                                  message id/WAMID, threaded through for markAsRead -- FR-601)
       questionsLoader.js        loads/validates config/questions.json
-      leadsRepo.js               Lead table data access (UNCHANGED)
+      productsLoader.js          FR-501: loads/validates config/products.json (same on-demand,
+                                  config-file pattern as questionsLoader.js)
+      leadsRepo.js               Lead table data access (now also updateProductMatch() for
+                                  FR-503/FR-504 -- a narrowly-scoped UPDATE, separate from
+                                  saveAnswers(), so it can't clobber question1/2_answer or
+                                  fallback/retry state)
       failedEventsRepo.js        FailedEvent table data access (+ channel param, for FR-305)
       settingsRepo.js            app_settings table data access (auto-reply toggle change)
     routes/
@@ -451,7 +937,9 @@ app/
     views/
       login.ejs                 server-rendered dashboard (EJS, no SPA — TD-003) -- UNCHANGED
       leads.ejs                 server-rendered dashboard; now also shows the auto-reply ON/OFF
-                                 toggle at the top (auto-reply toggle change)
+                                 toggle at the top (auto-reply toggle change), the matched product
+                                 name under a Lead's Q1 answer, and a "Needs review" badge for
+                                 low-confidence/unmatched Q1 answers (FR-503/FR-504)
       whatsappPair.ejs           pairing screen: QR / connected / reconnect-needed states,
                                   ban-risk disclosure (NFR-303)
   tests/                        node:test unit + integration tests (see below)

@@ -49,9 +49,31 @@ function toIsoTimestamp(unixSecondsString) {
  *   into inboundMessageProcessor.js's humanized-timing wiring, same
  *   reasoning as `sleep` -- undefined in production (real `Math.random`),
  *   fixed in tests so the FR-603 refresh-count is deterministic.
+ * @param {Array<{name: string, aliases?: string[]}>} [deps.products] -
+ *   FR-502..FR-504, forwarded straight into
+ *   inboundMessageProcessor.js's fuzzy-matching wiring. See that file's
+ *   doc comment for why this is left undefined by default rather than
+ *   defaulting to `[]`.
+ * @param {number} [deps.matchThreshold] - forwarded straight into
+ *   inboundMessageProcessor.js (FR-502..FR-504).
+ * @param {string[]} [deps.intentDenylist] - forwarded straight into
+ *   inboundMessageProcessor.js (FR-502..FR-504, post-review Critical fix).
  */
 function createWebhookRouter(deps) {
-  const { leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret, settingsRepo, sleep, random } = deps;
+  const {
+    leadsRepo,
+    failedEventsRepo,
+    metaClient,
+    questionsConfig,
+    verifyToken,
+    appSecret,
+    settingsRepo,
+    sleep,
+    random,
+    products,
+    matchThreshold,
+    intentDenylist,
+  } = deps;
   const router = express.Router();
 
   // FR-302: the actual state-machine-driving logic lives in the shared
@@ -71,6 +93,9 @@ function createWebhookRouter(deps) {
     sendTypingIndicator: metaClient.sendTypingIndicator,
     sleep,
     random,
+    products,
+    matchThreshold,
+    intentDenylist,
   });
 
   // GET /webhook -- Meta's verification handshake (Phase L).

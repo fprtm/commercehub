@@ -95,6 +95,14 @@ async function startTestServer(overrides = {}) {
     // src/lib/humanizedTiming.js's doc comment), so the same fixed
     // duration is computed every run.
     random: overrides.random || (() => 0.5),
+    // FR-501..FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
+    // left `undefined` unless a test explicitly opts in via
+    // `overrides.productsConfig` -- every pre-existing test that doesn't
+    // pass it keeps exercising fuzzy-matching as a complete no-op
+    // (NFR-502), same reasoning as `whatsappMode`/`baileysConnector` above.
+    productsConfig: overrides.productsConfig,
+    matchThreshold: overrides.matchThreshold,
+    intentDenylist: overrides.intentDenylist,
   });
 
   const server = await new Promise((resolve) => {
