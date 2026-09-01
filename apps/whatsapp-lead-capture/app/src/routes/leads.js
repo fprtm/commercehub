@@ -7,13 +7,20 @@ const { log } = require('../utils/logger');
 /**
  * @param {object} deps
  * @param {ReturnType<typeof import('../services/leadsRepo').createLeadsRepo>} deps.leadsRepo
+ * @param {ReturnType<typeof import('../services/settingsRepo').createSettingsRepo>} [deps.settingsRepo]
+ *   - FR-401 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md): read fresh
+ *   on every GET so the toggle's current state is always accurate on page
+ *   load. Optional (defaults to "always enabled") purely so this router's
+ *   pre-existing tests, which construct it without a settingsRepo, keep
+ *   passing unmodified -- same pattern as inboundMessageProcessor.js.
  */
-function createLeadsRouter({ leadsRepo }) {
+function createLeadsRouter({ leadsRepo, settingsRepo }) {
   const router = express.Router();
 
   router.get('/leads', requireAuth, (req, res) => {
     const leads = leadsRepo.listAllMostRecentFirst();
-    res.render('leads', { leads, flash: req.session.flash || null });
+    const autoReplyEnabled = settingsRepo ? settingsRepo.isAutoReplyEnabled() : true;
+    res.render('leads', { leads, flash: req.session.flash || null, autoReplyEnabled });
     req.session.flash = null;
   });
 
@@ -41,11 +48,12 @@ function createLeadsRouter({ leadsRepo }) {
       // plain-language flash message) at the 404/400 status code,
       // instead of issuing a redirect for the error path.
       const leads = leadsRepo.listAllMostRecentFirst();
+      const autoReplyEnabled = settingsRepo ? settingsRepo.isAutoReplyEnabled() : true;
       if (err.code === 'NOT_FOUND') {
-        return res.status(404).render('leads', { leads, flash: 'This lead no longer exists.' });
+        return res.status(404).render('leads', { leads, flash: 'This lead no longer exists.', autoReplyEnabled });
       }
       if (err.code === 'INVALID_STATUS') {
-        return res.status(400).render('leads', { leads, flash: `"${status}" is not a valid status.` });
+        return res.status(400).render('leads', { leads, flash: `"${status}" is not a valid status.`, autoReplyEnabled });
       }
       throw err;
     }

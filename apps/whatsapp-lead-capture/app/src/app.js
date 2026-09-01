@@ -8,9 +8,11 @@ const { createHealthRouter } = require('./routes/health');
 const { createWebhookRouter } = require('./routes/webhook');
 const { createAuthRouter } = require('./routes/auth');
 const { createLeadsRouter } = require('./routes/leads');
+const { createSettingsRouter } = require('./routes/settings');
 const { createWhatsappPairRouter } = require('./routes/whatsappPair');
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
+const { createSettingsRepo } = require('./services/settingsRepo');
 
 /**
  * Builds a fully-wired Express app from injected dependencies. Kept as a
@@ -54,6 +56,15 @@ function createApp(deps) {
 
   const leadsRepo = createLeadsRepo(db);
   const failedEventsRepo = createFailedEventsRepo(db);
+  // FR-401..FR-403 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md):
+  // constructed here (same pattern as leadsRepo/failedEventsRepo above) so
+  // both the webhook route and the dashboard/settings routes below share
+  // one settingsRepo instance backed by this same `db` -- the Baileys
+  // connector's own inbound-message processor (built separately, in
+  // src/server.js) constructs its own instance against the same db file,
+  // which is fine: settingsRepo never caches, every read hits SQLite fresh
+  // (NFR-401), so both instances always agree.
+  const settingsRepo = createSettingsRepo(db);
 
   const app = express();
   app.set('view engine', 'ejs');
@@ -72,9 +83,12 @@ function createApp(deps) {
   );
 
   app.use(createHealthRouter());
-  app.use(createWebhookRouter({ leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret }));
+  app.use(
+    createWebhookRouter({ leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret, settingsRepo }),
+  );
   app.use(createAuthRouter({ ownerUsername, ownerPassword }));
-  app.use(createLeadsRouter({ leadsRepo }));
+  app.use(createLeadsRouter({ leadsRepo, settingsRepo }));
+  app.use(createSettingsRouter({ settingsRepo }));
   app.use(createWhatsappPairRouter({ whatsappMode, baileysConnector }));
 
   app.get('/', (req, res) => res.redirect('/leads'));

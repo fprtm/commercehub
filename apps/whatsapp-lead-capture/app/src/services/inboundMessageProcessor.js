@@ -27,8 +27,16 @@ const { log } = require('../utils/logger');
  *   - the outbound half of FR-302's shared contract. Both metaClient and the
  *   Baileys connector expose a function with this exact shape, so this
  *   module never needs to know which one it's talking to.
+ * @param {ReturnType<typeof import('./settingsRepo').createSettingsRepo>} [deps.settingsRepo]
+ *   - FR-402/NFR-401 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md):
+ *   queried fresh on every single inbound message to decide whether the
+ *   reply-send loop below runs at all. Optional and defaults to "always
+ *   enabled" so every pre-existing caller/test that constructs this
+ *   processor without it (there are several) keeps working completely
+ *   unmodified -- same additive-parameter pattern already used for
+ *   `channel` above.
  */
-function createInboundMessageProcessor({ leadsRepo, questionsConfig, sendTextMessage }) {
+function createInboundMessageProcessor({ leadsRepo, questionsConfig, sendTextMessage, settingsRepo }) {
   return {
     /**
      * @param {object} params
@@ -69,16 +77,30 @@ function createInboundMessageProcessor({ leadsRepo, questionsConfig, sendTextMes
         lead = leadsRepo.saveAnswers(lead.id, decision.leadPatch);
       }
 
-      for (const replyText of decision.replies) {
-        // eslint-disable-next-line no-await-in-loop -- messages must go out in this exact order
-        await sendTextMessage(phoneNumber, replyText);
+      // FR-402/NFR-401: read fresh on every call, no caching -- a toggle
+      // flipped between two inbound messages (or by a concurrent dashboard
+      // request) is picked up on the very next message, never stale.
+      const autoReplyEnabled = settingsRepo ? settingsRepo.isAutoReplyEnabled() : true;
+
+      if (autoReplyEnabled) {
+        for (const replyText of decision.replies) {
+          // eslint-disable-next-line no-await-in-loop -- messages must go out in this exact order
+          await sendTextMessage(phoneNumber, replyText);
+        }
       }
+      // FR-402: when OFF, the Lead bookkeeping above still ran exactly as
+      // today -- only the outbound send loop is skipped. No reply is
+      // "queued" or sent later either; toggling back ON does not
+      // retroactively message whoever wrote in while it was OFF (there is
+      // nothing pending to flush -- decision.replies for this message simply
+      // never got sent).
 
       log('inbound_message_processed', {
         channel,
         leadId: lead?.id,
         messageType,
         action: decision.action,
+        autoReplyEnabled,
         reason: decision.reason,
       });
 

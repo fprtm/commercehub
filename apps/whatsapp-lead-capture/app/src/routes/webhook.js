@@ -30,6 +30,9 @@ function toIsoTimestamp(unixSecondsString) {
  * @param {ReturnType<typeof import('../services/failedEventsRepo').createFailedEventsRepo>} deps.failedEventsRepo
  * @param {ReturnType<typeof import('../services/metaClient').createMetaClient>} deps.metaClient
  * @param {object} deps.questionsConfig - loaded config/questions.json
+ * @param {ReturnType<typeof import('../services/settingsRepo').createSettingsRepo>} [deps.settingsRepo]
+ *   - FR-402 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md), forwarded
+ *   straight into the shared inboundMessageProcessor.js.
  * @param {string} deps.verifyToken - WHATSAPP_VERIFY_TOKEN
  * @param {string|undefined} deps.appSecret - WHATSAPP_APP_SECRET. The real
  *   entrypoint (src/server.js) now refuses to boot without this set
@@ -39,7 +42,7 @@ function toIsoTimestamp(unixSecondsString) {
  *   used directly by tests without needing a real secret.
  */
 function createWebhookRouter(deps) {
-  const { leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret } = deps;
+  const { leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret, settingsRepo } = deps;
   const router = express.Router();
 
   // FR-302: the actual state-machine-driving logic lives in the shared
@@ -51,6 +54,7 @@ function createWebhookRouter(deps) {
     leadsRepo,
     questionsConfig,
     sendTextMessage: metaClient.sendTextMessage,
+    settingsRepo,
   });
 
   // GET /webhook -- Meta's verification handshake (Phase L).

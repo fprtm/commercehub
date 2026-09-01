@@ -18,6 +18,7 @@ fictional). See the spec docs this was built from:
 - `../business-simulation.md`
 - `../docs/sdd/changes/2026-09-01-whatsapp-lead-capture.md`
 - `../docs/sdd/changes/2026-09-01-baileys-dual-mode.md` (dual-mode extension)
+- `../docs/sdd/changes/2026-09-01-auto-reply-toggle.md` (auto-reply ON/OFF toggle)
 - `../docs/sdd/design/technical-design.md`
 - `../docs/sdd/tasks/tasks.md`
 
@@ -75,15 +76,40 @@ dependency) against everything in `tests/`. All tests run against an
 socket** — nothing touches a real network, a real Meta account, or a real
 WhatsApp number/QR scan anywhere in the suite.
 
-Current result: **81 passed, 0 failed** — the original 61 (see the BUILD
-report for the full breakdown; 8 of those were added in a post-build review
-pass, see "Post-build review fixes" below) **plus 20 added for the Baileys
-dual-mode extension** (`tests/baileysConnector.test.js`,
-`tests/inboundMessageProcessor.test.js`, `tests/whatsappPair.test.js`). All
-61 original tests still pass **unmodified**, exercising `cloud_api` mode
-exactly as before (NFR-302) — the dual-mode change added new files and a
-handful of additive, default-preserving parameters; it did not edit any
-existing test.
+Current result: **100 passed, 0 failed** — 87 pre-existing (the original 61
+plus 20 added for the Baileys dual-mode extension, plus 6 more from other
+small fixes along the way; see the BUILD report and
+`2026-09-01-baileys-dual-mode.md` for that history) **plus 13 added for the
+auto-reply ON/OFF toggle** (`tests/settingsRepo.test.js`,
+`tests/autoReplyToggle.test.js`). All 87 pre-existing tests still pass
+**unmodified** — the toggle change added two new files
+(`src/services/settingsRepo.js`, `src/routes/settings.js`) and a handful of
+additive, default-preserving parameters (`settingsRepo` on
+`inboundMessageProcessor.js` and `leads.js`), same pattern the dual-mode
+change already used; it did not edit any existing test.
+
+## Pausing auto-reply (FR-401..FR-403)
+
+The owner can turn the automated WhatsApp flow on/off without editing an env
+var or restarting the server, via a toggle at the top of the Lead dashboard
+(`/leads`): see `docs/sdd/changes/2026-09-01-auto-reply-toggle.md`.
+
+- **ON (default)** — unchanged behavior: every inbound message drives the
+  qualifying-question flow and sends replies exactly as before.
+- **OFF** — inbound messages still create/update a Lead row (the data
+  pipeline never goes quiet), but no outbound reply (acknowledgment,
+  question, retry, or fallback) is sent. The bot goes quiet, not the data.
+  Turning it back ON later does **not** retroactively message anyone who
+  wrote in while it was off — there's no queue of "unsent" replies, only a
+  state flip; a genuinely new message after re-enabling is handled normally.
+
+The setting lives in a new single-row `app_settings` table and is read
+fresh from SQLite on every single inbound message and every dashboard page
+load (no caching layer) — see `src/services/settingsRepo.js` and the
+`settingsRepo` dependency threaded into
+`src/services/inboundMessageProcessor.js` (the one shared function both the
+Cloud API webhook route and the Baileys connector call into, so the toggle
+applies identically to both connector modes with zero mode-specific code).
 
 ## Configuring the qualifying questions (NFR-005)
 
@@ -199,13 +225,16 @@ app/
     app.js                    Express app factory (dependency-injected: db, connectors, config, mode)
     server.js                 real entrypoint: wires env vars, real DB, mode-selected connector
     db/
-      schema.sql               Lead + FailedEvent schema (+ FailedEvent.channel, added for FR-305)
+      schema.sql               Lead + FailedEvent + app_settings schema (+ FailedEvent.channel for
+                                FR-305; + app_settings single-row table for the auto-reply toggle)
       index.js                 DB factory (createDb) — used by server.js and tests alike
       migrate.js                standalone `npm run migrate` script
     services/
       stateMachine.js          T-005: qualifying-question state machine (core business logic, UNCHANGED)
       inboundMessageProcessor.js  FR-302: shared processInboundMessage() -- the one place both
-                                   connectors call into the state machine/Lead repo from
+                                   connectors call into the state machine/Lead repo from (now also
+                                   reads settingsRepo fresh on every call to gate the send loop --
+                                   auto-reply toggle change)
       metaClient.js             Meta Graph API client (real interface, mocked in tests)
       baileysConnector.js       Baileys adapter: connection lifecycle, reconnect/backoff (FR-304),
                                  logged-out detection (FR-305), QR pairing (FR-303)
@@ -213,19 +242,26 @@ app/
       questionsLoader.js        loads/validates config/questions.json
       leadsRepo.js               Lead table data access (UNCHANGED)
       failedEventsRepo.js        FailedEvent table data access (+ channel param, for FR-305)
+      settingsRepo.js            app_settings table data access (auto-reply toggle change)
     routes/
       webhook.js                GET/POST /webhook (Meta-facing; now a thin adapter onto
                                  inboundMessageProcessor.js)
       auth.js                    GET/POST /login, POST /logout
-      leads.js                   GET /leads, POST /leads/:id/status (UNCHANGED)
+      leads.js                   GET /leads, POST /leads/:id/status (now also reads settingsRepo to
+                                  render the auto-reply toggle's current state)
+      settings.js                POST /settings/auto-reply — toggles auto_reply_enabled (auto-reply
+                                  toggle change)
       whatsappPair.js            GET /whatsapp/pair, POST /whatsapp/pair/reset (FR-303/FR-305)
       health.js                  GET /health
-    middleware/requireAuth.js   session gate for the dashboard (reused by whatsappPair.js)
+    middleware/requireAuth.js   session gate for the dashboard (reused by whatsappPair.js and
+                                 settings.js)
     utils/
       signature.js               X-Hub-Signature-256 verification
       logger.js                  structured console logging
     views/
-      login.ejs, leads.ejs       server-rendered dashboard (EJS, no SPA — TD-003) -- UNCHANGED
+      login.ejs                 server-rendered dashboard (EJS, no SPA — TD-003) -- UNCHANGED
+      leads.ejs                 server-rendered dashboard; now also shows the auto-reply ON/OFF
+                                 toggle at the top (auto-reply toggle change)
       whatsappPair.ejs           pairing screen: QR / connected / reconnect-needed states,
                                   ban-risk disclosure (NFR-303)
   tests/                        node:test unit + integration tests (see below)

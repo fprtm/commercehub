@@ -10,6 +10,7 @@ const { createBaileysConnector } = require('./services/baileysConnector');
 const { createInboundMessageProcessor } = require('./services/inboundMessageProcessor');
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
+const { createSettingsRepo } = require('./services/settingsRepo');
 const { loadQuestionsConfig } = require('./services/questionsLoader');
 const { log } = require('./utils/logger');
 
@@ -83,6 +84,11 @@ function main() {
 
     const leadsRepo = createLeadsRepo(db);
     const failedEventsRepo = createFailedEventsRepo(db);
+    // FR-402 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md): a separate
+    // instance from the one createApp() builds internally for the
+    // webhook/dashboard routes below, but both point at the same `db` file
+    // and settingsRepo never caches (NFR-401), so they always agree.
+    const settingsRepo = createSettingsRepo(db);
 
     // sendTextMessage forwards to the connector via closure -- the
     // connector itself needs `processInboundMessage` at construction time,
@@ -92,6 +98,7 @@ function main() {
       leadsRepo,
       questionsConfig,
       sendTextMessage: (to, text) => baileysConnector.sendTextMessage(to, text),
+      settingsRepo,
     });
 
     baileysConnector = createBaileysConnector({ authDir, processInboundMessage, failedEventsRepo });

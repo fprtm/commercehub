@@ -25,6 +25,22 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS idx_leads_phone_number ON leads(phone_number);
 CREATE INDEX IF NOT EXISTS idx_leads_first_message_at ON leads(first_message_at);
 
+-- Added for docs/sdd/changes/2026-09-01-auto-reply-toggle.md (FR-401..FR-403).
+-- Single-row settings table -- id is pinned to 1 by the CHECK constraint so
+-- there can only ever be exactly one row, matching the "one owner, one
+-- setting" scope of this change (a generic key-value store would be
+-- premature abstraction for one boolean today, per the change doc's
+-- Settled Decisions). The INSERT OR IGNORE below seeds that single row with
+-- the default (auto_reply_enabled = true) the first time the schema is
+-- applied; it's a no-op on every subsequent boot since the row already
+-- exists by then.
+CREATE TABLE IF NOT EXISTS app_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  auto_reply_enabled INTEGER NOT NULL DEFAULT 1 CHECK (auto_reply_enabled IN (0, 1))
+);
+
+INSERT OR IGNORE INTO app_settings (id, auto_reply_enabled) VALUES (1, 1);
+
 CREATE TABLE IF NOT EXISTS failed_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   raw_payload TEXT NOT NULL,

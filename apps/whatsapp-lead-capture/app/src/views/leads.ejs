@@ -27,6 +27,12 @@
     .actions form { display: inline-block; margin-right: 0.4rem; }
     .actions button { padding: 0.35rem 0.7rem; font-size: 0.82rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
     .actions button:hover { background: #f0f0f0; }
+    .auto-reply-bar { display: flex; align-items: center; justify-content: space-between; background: #fff; padding: 0.9rem 1.2rem; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); margin-bottom: 1.5rem; }
+    .auto-reply-status { font-size: 0.92rem; }
+    .auto-reply-status .badge-on { background: #eaf7ea; color: #1e7d1e; }
+    .auto-reply-status .badge-off { background: #f4f4f4; color: #777; }
+    .auto-reply-bar button { padding: 0.4rem 0.9rem; font-size: 0.85rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    .auto-reply-bar button:hover { background: #f0f0f0; }
   </style>
 </head>
 <body>
@@ -37,6 +43,20 @@
     </form>
   </header>
   <main>
+    <div class="auto-reply-bar">
+      <span class="auto-reply-status">
+        Auto-reply is
+        <% if (autoReplyEnabled) { %>
+          <span class="badge badge-on">ON</span>
+        <% } else { %>
+          <span class="badge badge-off">OFF</span>
+        <% } %>
+      </span>
+      <form method="POST" action="/settings/auto-reply">
+        <button type="submit"><%= autoReplyEnabled ? 'Turn off' : 'Turn on' %></button>
+      </form>
+    </div>
+
     <% if (flash) { %>
       <div class="flash"><%= flash %></div>
     <% } %>
