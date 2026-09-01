@@ -19,6 +19,9 @@ fictional). See the spec docs this was built from:
 - `../docs/sdd/changes/2026-09-01-whatsapp-lead-capture.md`
 - `../docs/sdd/changes/2026-09-01-baileys-dual-mode.md` (dual-mode extension)
 - `../docs/sdd/changes/2026-09-01-auto-reply-toggle.md` (auto-reply ON/OFF toggle)
+- `../docs/sdd/changes/2026-09-01-humanized-timing-module.md` (humanized response timing, retires NFR-001)
+- `../docs/sdd/decisions/001-realistic-timing-over-speed-budget.md`
+- `../docs/sdd/decisions/002-reusable-humanized-timing-module.md`
 - `../docs/sdd/design/technical-design.md`
 - `../docs/sdd/tasks/tasks.md`
 
@@ -76,13 +79,55 @@ dependency) against everything in `tests/`. All tests run against an
 socket** — nothing touches a real network, a real Meta account, or a real
 WhatsApp number/QR scan anywhere in the suite.
 
-Current result: **100 passed, 0 failed** — 87 pre-existing (the original 61
-plus 20 added for the Baileys dual-mode extension, plus 6 more from other
-small fixes along the way; see the BUILD report and
+Current result: **128 passed, 0 failed** — 100 pre-existing **plus 28 added
+for the humanized-timing module and its post-review fixes**:
+- `tests/humanizedTiming.test.js` — 10 tests exercising the module in
+  isolation with mocked callbacks and a fake `sleep`, no real waiting.
+- `tests/baileysConnector.test.js` — 7 new tests for its `markAsRead`/
+  `sendTypingIndicator` primitives, plus 1 more for `messageId` threading.
+- `tests/metaClient.test.js` — 9 new tests for `markAsRead`/
+  `sendTypingIndicator` against a fake `fetchImpl` (request shape, the
+  "no messageId ⇒ no-op" guard, and the "never throws" contract) — added on
+  independent review, since the `readReceipts`/`typingIndicators` spies
+  already wired into `tests/helpers/testApp.js` were not actually being
+  asserted against anywhere for the Cloud API path (the recommended default
+  mode).
+- `tests/webhook.test.js` — 1 new integration test asserting
+  `ctx.metaClient.readReceipts`/`typingIndicators` actually get populated
+  over the real `POST /webhook` route (not just `metaClient.js` in
+  isolation), proving the wiring in `webhook.js` itself.
+- `tests/inboundMessageProcessor.test.js` — 1 new test proving `markAsRead`
+  fires for a new inbound message even when it produces zero scripted
+  replies (see "markAsRead does not depend on there being a reply" below —
+  a gap fixed on the same review).
+
+None of the 100 pre-existing tests had their assertions on final message
+*content* or Lead/state-machine outcomes changed; the few that needed
+touching only had a `sleep` (an instant fake) or new mock methods
+(`markAsRead`/`sendTypingIndicator`) added to their setup, so the whole
+suite stays fast (~13s total — the humanized-timing delays are never
+actually slept through in tests; see "Humanized response timing" below for
+how):
+- `tests/inboundMessageProcessor.test.js` and `tests/autoReplyToggle.test.js`
+  — added `sleep: async () => {}` to their direct
+  `createInboundMessageProcessor(...)` calls (otherwise every reply in
+  those tests would incur a real 1-3s+ delay).
+- `tests/baileysConnector.test.js` — no change to any pre-existing
+  assertion; only new, additive tests (see above).
+- `tests/helpers/testApp.js` — `createMockMetaClient()` gained
+  `markAsRead`/`sendTypingIndicator` spies (`readReceipts`/
+  `typingIndicators`), and `startTestServer()` now passes a fast default
+  `sleep` into `createApp()`, so every `webhook.test.js`/
+  `autoReplyToggle.test.js` HTTP-level test needed **zero** per-test
+  changes.
+
+Prior to this change: **100 passed, 0 failed** — 87 pre-existing (the
+original 61 plus 20 added for the Baileys dual-mode extension, plus 6 more
+from other small fixes along the way; see the BUILD report and
 `2026-09-01-baileys-dual-mode.md` for that history) **plus 13 added for the
 auto-reply ON/OFF toggle** (`tests/settingsRepo.test.js`,
-`tests/autoReplyToggle.test.js`). All 87 pre-existing tests still pass
-**unmodified** — the toggle change added two new files
+`tests/autoReplyToggle.test.js`). All 87 pre-existing tests still passed
+**unmodified** at that point — the toggle change added two new files
 (`src/services/settingsRepo.js`, `src/routes/settings.js`) and a handful of
 additive, default-preserving parameters (`settingsRepo` on
 `inboundMessageProcessor.js` and `leads.js`), same pattern the dual-mode
@@ -110,6 +155,142 @@ load (no caching layer) — see `src/services/settingsRepo.js` and the
 `src/services/inboundMessageProcessor.js` (the one shared function both the
 Cloud API webhook route and the Baileys connector call into, so the toggle
 applies identically to both connector modes with zero mode-specific code).
+
+## Humanized response timing (FR-601..FR-604) — and the honest trade-off
+
+**Replies are no longer sent instantly.** As of
+`docs/sdd/changes/2026-09-01-humanized-timing-module.md`, every automated
+reply (acknowledgment, question, retry, or fallback) is deliberately delayed
+and paced to feel like a human typing on their phone, not a bot firing back
+in milliseconds:
+
+1. The instant a message arrives, the app sends a WhatsApp **read receipt**
+   (blue check marks) — this is the customer's early "they saw my message"
+   signal.
+2. A short randomized pause (1–3s), simulating the beat before a human
+   starts typing.
+3. A **typing indicator** appears.
+4. The app waits a duration proportional to the outgoing reply's length, at
+   a realistic ~40 WPM mobile-typing pace (see the formula below) — for a
+   long reply this can be many seconds, deliberately.
+5. The message is sent.
+
+For a multi-message batch (e.g. the acknowledgment + question 1 sent
+together on first contact), the read receipt only fires once — there is
+only one inbound message to mark read — but each message in the batch still
+gets its own full typing-indicator-and-delay treatment, since a human would
+genuinely take a fresh beat to type each one.
+
+**markAsRead does not depend on there being a reply.** Post-review fix: the
+read receipt fires for *every* new inbound message while auto-reply is ON,
+even when the state machine produces zero scripted replies — e.g. a message
+after the flow is already complete, after fallback was already triggered,
+on an already-responded/closed lead, or answering Q2 with no
+`completionMessage` configured. Decision 001 frames the read receipt purely
+as "the customer gets an early signal their message was received", which
+doesn't logically depend on whether a reply follows — so it was decoupled
+from `decision.replies` being non-empty (see the comment in
+`src/services/inboundMessageProcessor.js`, and
+`tests/inboundMessageProcessor.test.js`'s "markAsRead still fires... even
+when decision.replies is empty" test). This is still gated on the
+auto-reply toggle (FR-401..FR-403) being ON — while it's OFF the bot stays
+fully quiet, including no read receipts, since there is no delay to
+mitigate at all in that state.
+
+### The retired 5-second budget (Decision 001)
+
+The original spec's NFR-001 required a reply within 5 seconds. **That
+requirement is retired in its original form** — see
+`docs/sdd/decisions/001-realistic-timing-over-speed-budget.md`. Fully
+realistic typing simulation can legitimately take 15–30+ seconds for a
+longer reply, well past 5 seconds. This was a deliberate trade-off, not an
+oversight:
+
+- **Why:** an instant, uniformly-timed auto-reply is a visible "this is a
+  bot" tell — a UX rough edge in general, and, in **Baileys mode**
+  specifically, a contributing factor to spam/ban-detection risk (see
+  "Dual WhatsApp mode" below).
+- **Mitigation:** the read receipt (step 1 above) still gives the customer
+  an immediate "they saw it" signal, even though the substantive text reply
+  now genuinely takes longer.
+- **Applies uniformly to both connector modes** (Cloud API and Baileys),
+  even though only Baileys carries the ban-risk motivation — one shared
+  module, not mode-specific timing, was an intentional simplification (see
+  `docs/sdd/decisions/002-reusable-humanized-timing-module.md`).
+- **A prospective client must be told plainly** that responses are
+  intentionally paced to look human, not instant, before this ships to
+  them. This is not hidden or silently applied.
+
+### The typing-speed formula
+
+Implemented in `src/lib/humanizedTiming.js`
+(`calculateTypingDurationMs`) — reasoning is documented directly in that
+file's comments, summarized here:
+
+- **~40 WPM** (midpoint of a realistic 35–45 WPM range for average *mobile*
+  typing — notably slower than physical-keyboard touch-typing).
+- The standard **5 characters per word** typing-speed convention, so the
+  constant stays comparable to published WPM figures.
+- `40 WPM × 5 chars/word = 200 chars/minute ≈ 300ms per character`. This is
+  intentionally **not** the ~150–250ms/char figure that would look
+  realistic at first glance but is actually closer to 80–133 WPM — fast
+  professional touch-typist speed, not an average person thumb-typing a
+  reply.
+- A **500ms floor** so a 1-2 character reply ("ok") doesn't compute to a
+  near-instant (robotic-looking) duration.
+- **±20% random jitter** so replies of the same length don't all take
+  *exactly* the same time.
+
+### Typing-indicator refresh (FR-603)
+
+Meta's Cloud API (and real WhatsApp clients, which Baileys mirrors)
+auto-dismiss a typing indicator after ~25 seconds. For any simulated typing
+duration longer than that, `src/lib/humanizedTiming.js` re-sends the typing
+indicator every ~20 seconds (a 5s safety margin) until the message actually
+goes out, so the indicator never visibly disappears mid-delay.
+
+### Built as a standalone, reusable module (Decision 002)
+
+`src/lib/humanizedTiming.js` has **zero import-time dependency on anything
+WhatsApp-specific** — it accepts three plain callback functions
+(`markAsRead`, `sendTypingIndicator`, `sendMessage`) and owns only the
+timing math and call ordering. Verified directly: `grep -n "require("
+src/lib/humanizedTiming.js` returns no matches at all. Its own test suite
+(`tests/humanizedTiming.test.js`) requires only that one file — no
+`metaClient.js`, no `baileysConnector.js` — proving it is reusable as-is by
+a future project (e.g. Project 2/3 or the AI-automation offer) that wants
+the same "don't reply instantly, feel human" behavior, by copying just this
+one file.
+
+`src/services/metaClient.js` and `src/services/baileysConnector.js` each
+expose thin, connector-specific `markAsRead(phoneNumber, messageId)` /
+`sendTypingIndicator(phoneNumber, messageId)` primitives (Meta: a Graph API
+status-update call; Baileys: `sock.readMessages` / a `composing` presence
+update). `src/services/inboundMessageProcessor.js` — the one shared
+reply-send loop both connector modes already route through — binds those
+connector-specific primitives into the generic callbacks
+`src/lib/humanizedTiming.js` expects, so the module itself never has to
+know which connector it's running under.
+
+### Keeping tests fast and deterministic (NFR-603)
+
+Real per-message delays (1-3s read pause + a length-proportional typing
+wait) would make the test suite painfully slow and non-deterministic if
+actually slept through. Instead:
+
+- `sendWithHumanizedTiming(...)` accepts an injectable `sleep` function
+  (default: a real `setTimeout`-based sleep) and an injectable `random`
+  function (default: `Math.random`).
+- `tests/humanizedTiming.test.js` passes a fake `sleep` that resolves
+  immediately (recording the requested delay instead of waiting) and a
+  fixed `random: () => 0.5`, so it can assert **exact** computed delays
+  (proving the real formula) and exact callback call **order/count**
+  (proving the real orchestration and the FR-603 refresh behavior) —
+  without spending real wall-clock time on any of it. The full 10-test file
+  runs in well under 100ms.
+- Every other test that exercises a reply path (`webhook.test.js`,
+  `autoReplyToggle.test.js`, `inboundMessageProcessor.test.js`) also injects
+  a fast/instant `sleep` — see "Running the tests" above for exactly where.
 
 ## Configuring the qualifying questions (NFR-005)
 
@@ -229,16 +410,25 @@ app/
                                 FR-305; + app_settings single-row table for the auto-reply toggle)
       index.js                 DB factory (createDb) — used by server.js and tests alike
       migrate.js                standalone `npm run migrate` script
+    lib/
+      humanizedTiming.js        FR-601..FR-604: standalone, transport-agnostic humanized-timing
+                                 module (read-delay + typing-simulation + FR-603 typing-indicator
+                                 refresh) -- zero WhatsApp-specific imports, reusable by future
+                                 projects (Decision 002)
     services/
       stateMachine.js          T-005: qualifying-question state machine (core business logic, UNCHANGED)
       inboundMessageProcessor.js  FR-302: shared processInboundMessage() -- the one place both
                                    connectors call into the state machine/Lead repo from (now also
                                    reads settingsRepo fresh on every call to gate the send loop --
-                                   auto-reply toggle change)
-      metaClient.js             Meta Graph API client (real interface, mocked in tests)
+                                   auto-reply toggle change; and now routes every reply through
+                                   lib/humanizedTiming.js instead of sending immediately -- FR-604)
+      metaClient.js             Meta Graph API client (real interface, mocked in tests); now also
+                                 exposes markAsRead/sendTypingIndicator (FR-601/FR-604)
       baileysConnector.js       Baileys adapter: connection lifecycle, reconnect/backoff (FR-304),
-                                 logged-out detection (FR-305), QR pairing (FR-303)
-      parseWebhookPayload.js    extracts normalized messages from a raw Meta payload
+                                 logged-out detection (FR-305), QR pairing (FR-303); now also
+                                 exposes markAsRead/sendTypingIndicator (FR-601/FR-604)
+      parseWebhookPayload.js    extracts normalized messages from a raw Meta payload (now also the
+                                 message id/WAMID, threaded through for markAsRead -- FR-601)
       questionsLoader.js        loads/validates config/questions.json
       leadsRepo.js               Lead table data access (UNCHANGED)
       failedEventsRepo.js        FailedEvent table data access (+ channel param, for FR-305)

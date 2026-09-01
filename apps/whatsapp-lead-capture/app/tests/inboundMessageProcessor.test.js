@@ -28,6 +28,11 @@ test('FR-302: processInboundMessage produces identical Lead outcomes whether cal
     sendTextMessage: async (to, body) => {
       sent.push({ to, body });
     },
+    // NFR-603: every reply now goes through src/lib/humanizedTiming.js,
+    // which defaults to real delays -- an instant fake `sleep` keeps this
+    // test fast/deterministic (see tests/humanizedTiming.test.js for
+    // dedicated coverage of the real timing formula/orchestration itself).
+    sleep: async () => {},
   });
 
   // Shape webhook.js actually calls with (see src/routes/webhook.js's processMessage()).
@@ -77,6 +82,7 @@ test('FR-302: a full qualifying-question flow behaves identically when driven en
     leadsRepo,
     questionsConfig: TEST_CONFIG,
     sendTextMessage: async () => {},
+    sleep: async () => {}, // NFR-603, see comment above
   });
 
   const phone = '628333333333';
@@ -88,6 +94,49 @@ test('FR-302: a full qualifying-question flow behaves identically when driven en
   assert.equal(lead.question1_answer, 'Kaos Rimba Hitam');
   assert.equal(lead.question2_answer, 'Size L, WhatsApp aja');
   assert.equal(lead.fallback_triggered, 0);
+
+  db.close();
+});
+
+test('FR-601 (post-review fix): markAsRead still fires for a new inbound message even when decision.replies is empty (e.g. the flow is already complete)', async () => {
+  // Decision made on review: markAsRead is decoupled from whether a
+  // scripted reply follows -- Decision 001 frames the read receipt as
+  // "the customer gets an early signal their message was received",
+  // which does not logically depend on there being a queued reply. This
+  // covers the "flow already complete" NO_OP case specifically; the same
+  // fix also covers NO_OP on an already-responded/closed lead, fallback
+  // already triggered, and ANSWER_Q2 with no completionMessage configured
+  // -- all of those hit the same `if (markAsRead) await markAsRead(...)`
+  // call in inboundMessageProcessor.js, unconditional on decision.replies.
+  const db = createDb(':memory:');
+  const leadsRepo = createLeadsRepo(db);
+  const sent = [];
+  const readReceipts = [];
+  const { processInboundMessage } = createInboundMessageProcessor({
+    leadsRepo,
+    questionsConfig: TEST_CONFIG,
+    sendTextMessage: async (to, body) => { sent.push({ to, body }); },
+    markAsRead: async (to, messageId) => { readReceipts.push({ to, messageId }); },
+    sleep: async () => {},
+  });
+
+  const phone = '628444444444';
+  // Complete the flow: start (ack+Q1), answer Q1 (Q2), answer Q2
+  // (completionMessage, since TEST_CONFIG defines one) -- 4 sends, 3 read
+  // receipts, all messages so far genuinely produced a reply.
+  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text', messageId: 'm1' });
+  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Hitam', messageType: 'text', messageId: 'm2' });
+  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text', messageId: 'm3' });
+  assert.equal(readReceipts.length, 3, 'sanity: one read receipt per inbound message so far, all of which had replies');
+  const sentCountBeforeFourthMessage = sent.length;
+
+  // A 4th message after the flow is already complete -- NO_OP, zero replies.
+  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'thanks!', messageType: 'text', messageId: 'm4' });
+
+  assert.equal(result.decision.replies.length, 0, 'sanity: this message genuinely produces zero scripted replies');
+  assert.equal(sent.length, sentCountBeforeFourthMessage, 'no new outbound reply was sent for the 4th message (unchanged behavior)');
+  assert.equal(readReceipts.length, 4, 'the read receipt still fired for the 4th message, even though it produced no reply');
+  assert.deepEqual(readReceipts[3], { to: phone, messageId: 'm4' });
 
   db.close();
 });

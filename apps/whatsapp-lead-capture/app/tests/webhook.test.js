@@ -75,6 +75,44 @@ test('T-006 POST /webhook: first-time message creates a Lead and sends ack + Q1 
   }
 });
 
+test('FR-601/FR-604 POST /webhook: an inbound message triggers a read receipt and a typing indicator via the real webhook route, not just sendTextMessage', async () => {
+  const ctx = await startTestServer();
+  try {
+    const phone = '6281234500001';
+    await fetch(`${ctx.baseUrl}/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messagePayload(phone, 'halo, baju ini masih ada?')),
+    });
+
+    // Exercises the readReceipts/typingIndicators spies tests/helpers/testApp.js
+    // already wires into the mock Meta client (FR-601: markAsRead fires
+    // once per inbound message; FR-603: sendTypingIndicator fires at least
+    // once per reply sent, more if a reply's typing duration crosses the
+    // ~20s refresh threshold) -- proves webhook.js actually wires
+    // metaClient.markAsRead/sendTypingIndicator through to
+    // inboundMessageProcessor.js, not just metaClient.js in isolation.
+    // Asserts "at least once per reply" rather than a single exact count:
+    // the *exact* refresh count for a given message length is
+    // src/lib/humanizedTiming.js's concern and is already deterministically
+    // proven, per-formula, in tests/humanizedTiming.test.js -- pinning an
+    // exact number here would just make this wiring test fragile to
+    // TEST_CONFIG's message lengths relative to the FR-603 threshold.
+    assert.equal(ctx.metaClient.readReceipts.length, 1, 'exactly one read receipt for the one inbound message (not per-reply)');
+    assert.deepEqual(ctx.metaClient.readReceipts[0], { to: phone, messageId: 'wamid.1' });
+
+    assert.ok(
+      ctx.metaClient.typingIndicators.length >= 2,
+      `expected at least one typing-indicator call per reply sent (ack + Q1), got ${ctx.metaClient.typingIndicators.length}`,
+    );
+    for (const call of ctx.metaClient.typingIndicators) {
+      assert.deepEqual(call, { to: phone, messageId: 'wamid.1' });
+    }
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('T-006 POST /webhook: full happy-path conversation (ack -> Q1 -> Q2 -> complete)', async () => {
   const ctx = await startTestServer();
   try {

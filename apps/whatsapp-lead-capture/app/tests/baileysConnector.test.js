@@ -353,6 +353,25 @@ test('FR-302: messages.upsert extracts the phone number from the JID and calls t
   assert.equal(calls[1].messageType, 'stickerMessage');
 });
 
+test('FR-601: messages.upsert threads the Baileys message id (msg.key.id) through to processInboundMessage as messageId', async () => {
+  const calls = [];
+  const { connector } = buildConnector({ processInboundMessage: async (args) => calls.push(args) });
+  await connector.start();
+
+  await connector._handleMessagesUpsert({
+    type: 'notify',
+    messages: [
+      {
+        key: { remoteJid: '6281234567890@s.whatsapp.net', fromMe: false, id: 'BAILEYS-MSG-ID-1' },
+        message: { conversation: 'halo' },
+      },
+    ],
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].messageId, 'BAILEYS-MSG-ID-1');
+});
+
 test('a processInboundMessage failure during messages.upsert is recorded as a whatsapp_baileys FailedEvent, not thrown', async () => {
   const { connector, failedEvents } = buildConnector({
     processInboundMessage: async () => {
@@ -383,4 +402,77 @@ test('FR-302: sendTextMessage forwards to the underlying socket with a WhatsApp 
 test('sendTextMessage throws a clear error if called before the socket is connected', async () => {
   const { connector } = buildConnector();
   await assert.rejects(() => connector.sendTextMessage('6281234567890', 'hi'), /not connected/i);
+});
+
+// --- FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+// markAsRead/sendTypingIndicator are the new Baileys-specific primitives the
+// shared humanized-timing module (src/lib/humanizedTiming.js) calls into via
+// inboundMessageProcessor.js. These are unit-tested here in isolation (fake
+// sock, no real timing/orchestration involved -- that's covered by
+// tests/humanizedTiming.test.js and the real delay math is proven there,
+// deterministically, with a fake `sleep`).
+
+test('FR-601: markAsRead calls sock.readMessages with a JID built from the phone number and the given message id', async () => {
+  const fakeSock = createFakeSock();
+  const readCalls = [];
+  fakeSock.readMessages = async (keys) => readCalls.push(...keys);
+
+  const { connector } = buildConnector({
+    connectorOverrides: { makeSocket: async () => fakeSock },
+  });
+  await connector.start();
+
+  await connector.markAsRead('6281234567890', 'wamid.123');
+
+  assert.deepEqual(readCalls, [{ remoteJid: '6281234567890@s.whatsapp.net', id: 'wamid.123' }]);
+});
+
+test('FR-601: markAsRead is a safe no-op if called before the socket is connected (never throws)', async () => {
+  const { connector } = buildConnector();
+  await assert.doesNotReject(() => connector.markAsRead('6281234567890', 'wamid.123'));
+});
+
+test('FR-601: markAsRead is a safe no-op with no messageId (nothing to mark read against)', async () => {
+  const fakeSock = createFakeSock();
+  const readCalls = [];
+  fakeSock.readMessages = async (keys) => readCalls.push(...keys);
+  const { connector } = buildConnector({ connectorOverrides: { makeSocket: async () => fakeSock } });
+  await connector.start();
+
+  await connector.markAsRead('6281234567890', undefined);
+
+  assert.equal(readCalls.length, 0);
+});
+
+test('FR-603: sendTypingIndicator sends a "composing" presence update to the JID', async () => {
+  const fakeSock = createFakeSock();
+  const presenceCalls = [];
+  fakeSock.sendPresenceUpdate = async (presence, jid) => presenceCalls.push({ presence, jid });
+
+  const { connector } = buildConnector({ connectorOverrides: { makeSocket: async () => fakeSock } });
+  await connector.start();
+
+  await connector.sendTypingIndicator('6281234567890');
+
+  assert.deepEqual(presenceCalls, [{ presence: 'composing', jid: '6281234567890@s.whatsapp.net' }]);
+});
+
+test('FR-603: sendTypingIndicator is a safe no-op if called before the socket is connected (never throws)', async () => {
+  const { connector } = buildConnector();
+  await assert.doesNotReject(() => connector.sendTypingIndicator('6281234567890'));
+});
+
+test('FR-601/FR-604: markAsRead/sendTypingIndicator never throw even if the underlying socket call rejects -- a failed "nice to have" signal must not break the reply pipeline', async () => {
+  const fakeSock = createFakeSock();
+  fakeSock.readMessages = async () => { throw new Error('simulated socket failure'); };
+  fakeSock.sendPresenceUpdate = async () => { throw new Error('simulated socket failure'); };
+
+  const { connector, logs } = buildConnector({ connectorOverrides: { makeSocket: async () => fakeSock } });
+  await connector.start();
+
+  await assert.doesNotReject(() => connector.markAsRead('6281234567890', 'wamid.1'));
+  await assert.doesNotReject(() => connector.sendTypingIndicator('6281234567890'));
+
+  assert.ok(logs.some((l) => l.event === 'baileys_mark_read_failed'));
+  assert.ok(logs.some((l) => l.event === 'baileys_typing_indicator_failed'));
 });

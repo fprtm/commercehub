@@ -337,6 +337,11 @@ function createBaileysConnector({
           messageType,
           timestamp,
           channel: 'whatsapp_baileys',
+          // FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+          // threaded through to inboundMessageProcessor.js -> markAsRead
+          // below, mirroring the WAMID threaded through webhook.js for the
+          // Cloud API side.
+          messageId: msg.key?.id,
         });
       } catch (err) {
         log('baileys_message_processing_failed', { error: err.message });
@@ -349,6 +354,43 @@ function createBaileysConnector({
   async function sendTextMessage(phoneNumber, text) {
     if (!sock) throw new Error('Baileys socket is not connected');
     await sock.sendMessage(toJid(phoneNumber), { text });
+  }
+
+  /**
+   * FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+   * the markAsRead half of the shared humanized-timing contract (alongside
+   * sendTypingIndicator below), orchestrated by
+   * src/lib/humanizedTiming.js via inboundMessageProcessor.js -- this
+   * function itself is just the thin Baileys-specific primitive. Unlike
+   * metaClient.js's markAsRead, Baileys genuinely needs `phoneNumber` here
+   * (to build the JID for `sock.readMessages`), not just `messageId`.
+   *
+   * Deliberately never throws: a failed read receipt is a "nice to have"
+   * human-feel signal, not the substantive reply -- it must never block or
+   * fail the actual message send that follows.
+   */
+  async function markAsRead(phoneNumber, messageId) {
+    if (!sock || !messageId) return;
+    try {
+      await sock.readMessages([{ remoteJid: toJid(phoneNumber), id: messageId }]);
+    } catch (err) {
+      log('baileys_mark_read_failed', { error: err.message });
+    }
+  }
+
+  /**
+   * FR-603: re-sent periodically by src/lib/humanizedTiming.js (not this
+   * function) for long simulated typing durations. Baileys models "typing"
+   * as a presence update, not a discrete read/typing status call like
+   * Meta's Cloud API.
+   */
+  async function sendTypingIndicator(phoneNumber) {
+    if (!sock) return;
+    try {
+      await sock.sendPresenceUpdate('composing', toJid(phoneNumber));
+    } catch (err) {
+      log('baileys_typing_indicator_failed', { error: err.message });
+    }
   }
 
   async function start() {
@@ -403,6 +445,8 @@ function createBaileysConnector({
     resetAndRestart,
     getStatus,
     sendTextMessage,
+    markAsRead,
+    sendTypingIndicator,
     // Exposed for tests: lets a test drive the connector's event handlers
     // directly (or via a fake sock.ev emitter after start()) without a real
     // Baileys connection -- see tests/baileysConnector.test.js.

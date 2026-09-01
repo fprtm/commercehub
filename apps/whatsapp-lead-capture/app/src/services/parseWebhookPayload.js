@@ -37,6 +37,11 @@ function extractMessages(payload) {
         }
         messages.push({
           from: msg.from,
+          // FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+          // the WAMID, threaded through so webhook.js can pass it into
+          // processInboundMessage -> metaClient.markAsRead/sendTypingIndicator,
+          // which need it to mark the *specific* inbound message as read.
+          id: msg.id || null,
           timestamp: msg.timestamp || null,
           type: msg.type || 'unknown',
           text: msg.type === 'text' && msg.text && typeof msg.text.body === 'string' ? msg.text.body : null,

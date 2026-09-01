@@ -40,9 +40,18 @@ function toIsoTimestamp(unixSecondsString) {
  *   verification is never optional. It remains an injectable dependency
  *   here (rather than hardcoded) so the createApp() factory can still be
  *   used directly by tests without needing a real secret.
+ * @param {(ms: number) => Promise<unknown>} [deps.sleep] - FR-601/NFR-603
+ *   (docs/sdd/changes/2026-09-01-humanized-timing-module.md): forwarded
+ *   straight into inboundMessageProcessor.js's humanized-timing wiring.
+ *   Left undefined in production (real delay); tests inject a fast fake --
+ *   see tests/helpers/testApp.js.
+ * @param {() => number} [deps.random] - FR-601/NFR-603: forwarded straight
+ *   into inboundMessageProcessor.js's humanized-timing wiring, same
+ *   reasoning as `sleep` -- undefined in production (real `Math.random`),
+ *   fixed in tests so the FR-603 refresh-count is deterministic.
  */
 function createWebhookRouter(deps) {
-  const { leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret, settingsRepo } = deps;
+  const { leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret, settingsRepo, sleep, random } = deps;
   const router = express.Router();
 
   // FR-302: the actual state-machine-driving logic lives in the shared
@@ -55,6 +64,13 @@ function createWebhookRouter(deps) {
     questionsConfig,
     sendTextMessage: metaClient.sendTextMessage,
     settingsRepo,
+    // FR-604: routes the Cloud API send path through the shared
+    // humanized-timing module via metaClient's markAsRead/sendTypingIndicator
+    // primitives.
+    markAsRead: metaClient.markAsRead,
+    sendTypingIndicator: metaClient.sendTypingIndicator,
+    sleep,
+    random,
   });
 
   // GET /webhook -- Meta's verification handshake (Phase L).
@@ -79,6 +95,9 @@ function createWebhookRouter(deps) {
       messageType: message.type,
       timestamp: toIsoTimestamp(message.timestamp),
       channel: 'whatsapp_cloud_api',
+      // FR-601: the WAMID (see parseWebhookPayload.js), so markAsRead/
+      // sendTypingIndicator above can reference this specific message.
+      messageId: message.id,
     });
   }
 

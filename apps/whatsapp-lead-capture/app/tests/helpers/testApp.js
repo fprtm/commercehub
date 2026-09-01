@@ -18,17 +18,34 @@ const TEST_CONFIG = {
  * making a real network call. This is what T-006's integration tests
  * assert against -- there is no live Meta account/credentials available in
  * this environment (see app/README.md).
+ *
+ * readReceipts/typingIndicators (FR-601/FR-604,
+ * docs/sdd/changes/2026-09-01-humanized-timing-module.md) record the new
+ * markAsRead/sendTypingIndicator calls the humanized-timing wiring now
+ * makes before every send -- pre-existing tests that only assert on
+ * `sentMessages` are unaffected (final message content/order is unchanged),
+ * but these are here for any test that wants to assert on them directly.
  */
 function createMockMetaClient({ failOn } = {}) {
   const sentMessages = [];
+  const readReceipts = [];
+  const typingIndicators = [];
   return {
     sentMessages,
+    readReceipts,
+    typingIndicators,
     async sendTextMessage(to, body) {
       if (failOn && failOn(to, body)) {
         throw new Error('Simulated Meta API failure');
       }
       sentMessages.push({ to, body });
       return { messages: [{ id: `mock-${sentMessages.length}` }] };
+    },
+    async markAsRead(to, messageId) {
+      readReceipts.push({ to, messageId });
+    },
+    async sendTypingIndicator(to, messageId) {
+      typingIndicators.push({ to, messageId });
     },
   };
 }
@@ -57,6 +74,27 @@ async function startTestServer(overrides = {}) {
     // original cloud_api-only behavior unmodified (NFR-302).
     whatsappMode: overrides.whatsappMode,
     baileysConnector: overrides.baileysConnector,
+    // NFR-603 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+    // every outbound reply is now routed through
+    // src/lib/humanizedTiming.js, which by default waits real
+    // (setTimeout-based) delays -- a 1-3s read pause plus a
+    // length-proportional typing delay, per message. Without this
+    // override, every webhook/reply test in the suite would incur those
+    // real delays. An instant no-op sleep keeps the whole suite fast and
+    // deterministic while the real formula/orchestration logic is still
+    // proven separately, against real delay values, by
+    // tests/humanizedTiming.test.js.
+    sleep: overrides.sleep || (async () => {}),
+    // Post-review fix: `random` must also be fixed, not just `sleep`.
+    // With real Math.random() jitter, a reply whose *base* typing duration
+    // sits close to FR-603's ~20s refresh threshold (e.g. TEST_CONFIG's
+    // acknowledgment text, ~21.3s base) could jitter to either side of
+    // 20s from one test run to the next, making the number of
+    // sendTypingIndicator calls -- and therefore any test asserting an
+    // exact count -- flaky. `() => 0.5` neutralizes jitter entirely (see
+    // src/lib/humanizedTiming.js's doc comment), so the same fixed
+    // duration is computed every run.
+    random: overrides.random || (() => 0.5),
   });
 
   const server = await new Promise((resolve) => {

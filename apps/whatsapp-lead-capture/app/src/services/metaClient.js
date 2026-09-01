@@ -55,7 +55,73 @@ function createMetaClient({ accessToken, phoneNumberId, fetchImpl = fetch }) {
       log('meta_send_ok', { to, messageId: payload?.messages?.[0]?.id });
       return payload;
     },
+
+    /**
+     * FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+     * the outbound half of the shared humanized-timing contract, alongside
+     * sendTypingIndicator below. Meta's real Cloud API marks a specific
+     * inbound message as read via `{ status: 'read', message_id }` -- it
+     * needs no `to` field (the phone_number_id in the URL already scopes
+     * the call), so `_phoneNumber` here is accepted only to keep this
+     * function's signature identical to baileysConnector.js's markAsRead
+     * (which *does* need the phone number, to build a JID) -- the shared
+     * caller (inboundMessageProcessor.js) can then treat both connectors
+     * uniformly without knowing which one it's talking to.
+     *
+     * Deliberately never throws: a failure to mark-as-read/show-typing is a
+     * "nice to have" human-feel signal, not the substantive reply -- it must
+     * never block or fail the actual message send that follows.
+     */
+    async markAsRead(_phoneNumber, messageId) {
+      return sendStatusUpdate({ messageId, status: 'read' });
+    },
+
+    /**
+     * FR-603: re-sending this periodically (owned by
+     * src/lib/humanizedTiming.js, not this file) is what keeps the
+     * indicator from visibly lapsing on long simulated typing durations,
+     * since Meta auto-dismisses it after ~25s. Modeled on Meta's real
+     * combined read+typing-indicator status update.
+     */
+    async sendTypingIndicator(_phoneNumber, messageId) {
+      return sendStatusUpdate({ messageId, status: 'read', typingIndicator: true });
+    },
   };
+
+  async function sendStatusUpdate({ messageId, status, typingIndicator = false }) {
+    // Without an inbound message id there is nothing to mark read / show
+    // typing against (e.g. a caller that never threaded one through) --
+    // silently no-op rather than sending a malformed request.
+    if (!messageId) return null;
+
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          status,
+          message_id: messageId,
+          ...(typingIndicator ? { typing_indicator: { type: 'text' } } : {}),
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        log('meta_status_update_failed', { messageId, status, statusCode: response.status, payload });
+        return null;
+      }
+
+      return payload;
+    } catch (err) {
+      log('meta_status_update_error', { messageId, status, error: err.message });
+      return null;
+    }
+  }
 }
 
 module.exports = { createMetaClient, GRAPH_API_VERSION };

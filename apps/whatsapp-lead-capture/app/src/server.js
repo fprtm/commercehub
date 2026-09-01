@@ -94,10 +94,14 @@ function main() {
     // connector itself needs `processInboundMessage` at construction time,
     // and `processInboundMessage` needs the connector's sendTextMessage, so
     // this indirection breaks the circular dependency between the two.
+    // markAsRead/sendTypingIndicator (FR-601/FR-604) use the same closure
+    // trick for the same reason.
     const { processInboundMessage } = createInboundMessageProcessor({
       leadsRepo,
       questionsConfig,
       sendTextMessage: (to, text) => baileysConnector.sendTextMessage(to, text),
+      markAsRead: (to, messageId) => baileysConnector.markAsRead(to, messageId),
+      sendTypingIndicator: (to, messageId) => baileysConnector.sendTypingIndicator(to, messageId),
       settingsRepo,
     });
 

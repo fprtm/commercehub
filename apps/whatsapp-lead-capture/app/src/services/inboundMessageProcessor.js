@@ -2,6 +2,7 @@
 
 const { decideNextAction } = require('./stateMachine');
 const { log } = require('../utils/logger');
+const { sendWithHumanizedTiming } = require('../lib/humanizedTiming');
 
 /**
  * The shared inbound-message contract (FR-302 of
@@ -35,8 +36,40 @@ const { log } = require('../utils/logger');
  *   processor without it (there are several) keeps working completely
  *   unmodified -- same additive-parameter pattern already used for
  *   `channel` above.
+ * @param {(phoneNumber: string, messageId: string|undefined) => Promise<unknown>} [deps.markAsRead]
+ *   - FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+ *   the connector-specific "mark this inbound message as read" primitive
+ *   (metaClient.markAsRead / baileysConnector.markAsRead). Optional and
+ *   defaults to a no-op so every pre-existing caller/test that constructs
+ *   this processor without it keeps working unmodified -- same
+ *   additive-parameter pattern as `settingsRepo` above.
+ * @param {(phoneNumber: string, messageId: string|undefined) => Promise<unknown>} [deps.sendTypingIndicator]
+ *   - FR-601/FR-603: the connector-specific "show typing" primitive.
+ *   Optional, defaults to a no-op, same reasoning as `markAsRead` above.
+ * @param {(ms: number) => Promise<unknown>} [deps.sleep] - injectable delay
+ *   mechanism forwarded straight into
+ *   src/lib/humanizedTiming.js#sendWithHumanizedTiming (NFR-603). Left
+ *   undefined in production (real setTimeout-based delay); tests pass a
+ *   fast/instant fake so the suite never actually waits in real time.
+ * @param {() => number} [deps.random] - injectable RNG forwarded straight
+ *   into src/lib/humanizedTiming.js#sendWithHumanizedTiming (NFR-603, same
+ *   reasoning as `sleep`). Left undefined in production (real
+ *   `Math.random`); tests pass a fixed function so the exact typing-delay
+ *   duration -- and therefore how many times FR-603's periodic
+ *   typing-indicator refresh fires -- is deterministic instead of
+ *   depending on which side of the ~20s refresh threshold real jitter
+ *   happens to land on for a given message length.
  */
-function createInboundMessageProcessor({ leadsRepo, questionsConfig, sendTextMessage, settingsRepo }) {
+function createInboundMessageProcessor({
+  leadsRepo,
+  questionsConfig,
+  sendTextMessage,
+  settingsRepo,
+  markAsRead,
+  sendTypingIndicator,
+  sleep,
+  random,
+}) {
   return {
     /**
      * @param {object} params
@@ -57,8 +90,20 @@ function createInboundMessageProcessor({ leadsRepo, questionsConfig, sendTextMes
      *   before calling in. Falls back to "now" if omitted.
      * @param {string} [params.channel] - 'whatsapp_cloud_api' |
      *   'whatsapp_baileys', purely for logging/FailedEvent attribution.
+     * @param {string} [params.messageId] - FR-601: the inbound message's own
+     *   id (Meta's WAMID, or Baileys' `msg.key.id`), threaded through to
+     *   `markAsRead`/`sendTypingIndicator` below so the read receipt/typing
+     *   indicator can reference the specific message that triggered this
+     *   reply. Optional -- if omitted, markAsRead simply has nothing to mark.
      */
-    async processInboundMessage({ phoneNumber, messageBody, messageType, timestamp, channel = 'whatsapp_cloud_api' }) {
+    async processInboundMessage({
+      phoneNumber,
+      messageBody,
+      messageType,
+      timestamp,
+      channel = 'whatsapp_cloud_api',
+      messageId,
+    }) {
       const existingLead = leadsRepo.findByPhone(phoneNumber);
       const decision = decideNextAction({
         existingLead,
@@ -83,9 +128,46 @@ function createInboundMessageProcessor({ leadsRepo, questionsConfig, sendTextMes
       const autoReplyEnabled = settingsRepo ? settingsRepo.isAutoReplyEnabled() : true;
 
       if (autoReplyEnabled) {
+        // FR-601/FR-604: every automated reply (ack, question, retry, or
+        // fallback) is routed through the shared, transport-agnostic
+        // humanized-timing module (src/lib/humanizedTiming.js) instead of
+        // being sent immediately -- see
+        // docs/sdd/changes/2026-09-01-humanized-timing-module.md and
+        // Decision 001 for why this replaces the original 5s reply budget.
+        //
+        // Post-review fix (gap found: markAsRead was silently skipped
+        // whenever decision.replies was empty -- not just in the
+        // multi-reply-batch case the original comment here described, but
+        // also for NO_OP on an already-responded/closed lead, fallback
+        // already triggered, flow already complete, or ANSWER_Q2 with no
+        // completionMessage configured. In every one of those cases a
+        // customer's genuinely new inbound message got no read receipt at
+        // all.) Decision made: (b) -- markAsRead now fires unconditionally
+        // for any new inbound message while auto-reply is ON, regardless of
+        // whether a scripted reply follows. Decision 001 frames the read
+        // receipt purely as "the customer gets an early signal their
+        // message was received", which does not logically depend on
+        // whether a reply is queued -- so it is called here, exactly once,
+        // before the reply loop (not per-reply -- there is still only one
+        // inbound message to mark read, and re-marking it before every
+        // reply in a multi-reply batch would just add compounding latency
+        // with no real human-behavior justification). Each reply below
+        // still gets its own full typing-indicator + length-proportional
+        // delay -- only the already-fired markAsRead is a no-op there.
+        if (markAsRead) await markAsRead(phoneNumber, messageId);
+
         for (const replyText of decision.replies) {
           // eslint-disable-next-line no-await-in-loop -- messages must go out in this exact order
-          await sendTextMessage(phoneNumber, replyText);
+          await sendWithHumanizedTiming({
+            messageText: replyText,
+            sleep,
+            random,
+            markAsRead: async () => {}, // already fired once, above, for this inbound message
+            sendTypingIndicator: async () => {
+              if (sendTypingIndicator) await sendTypingIndicator(phoneNumber, messageId);
+            },
+            sendMessage: (text) => sendTextMessage(phoneNumber, text),
+          });
         }
       }
       // FR-402: when OFF, the Lead bookkeeping above still ran exactly as

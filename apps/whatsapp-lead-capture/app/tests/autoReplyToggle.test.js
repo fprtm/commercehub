@@ -67,6 +67,11 @@ test('FR-402 (unit): auto_reply_enabled=false -- inbound message still creates a
     questionsConfig: require('./helpers/testApp').TEST_CONFIG,
     sendTextMessage: async (to, body) => { sent.push({ to, body }); },
     settingsRepo,
+    // NFR-603 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+    // every reply now goes through src/lib/humanizedTiming.js, which
+    // defaults to real delays -- an instant fake `sleep` keeps this test
+    // fast/deterministic.
+    sleep: async () => {},
   });
 
   const phone = '628999900001';
@@ -104,6 +109,7 @@ test('FR-402 (unit): same bookkeeping (createLead + leadPatch) runs whether auto
       questionsConfig: configPatch,
       sendTextMessage: async (to, body) => { sent.push({ to, body }); },
       settingsRepo,
+      sleep: async () => {}, // NFR-603, see comment above
     });
     const phone = autoReplyEnabled ? '628999900010' : '628999900011';
     await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });

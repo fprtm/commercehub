@@ -52,6 +52,16 @@ function createApp(deps) {
     ownerPassword,
     whatsappMode = 'cloud_api',
     baileysConnector = null,
+    // FR-601/NFR-603 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
+    // forwarded to the webhook route's inboundMessageProcessor wiring below.
+    // Undefined in production (real delay/RNG); tests override both with a
+    // fast fake sleep and a fixed random (see tests/helpers/testApp.js) so
+    // the suite stays fast *and* deterministic -- including which side of
+    // FR-603's ~20s typing-indicator-refresh threshold a given message
+    // length lands on, which would otherwise vary run-to-run with real
+    // jitter (post-review fix).
+    sleep,
+    random,
   } = deps;
 
   const leadsRepo = createLeadsRepo(db);
@@ -84,7 +94,17 @@ function createApp(deps) {
 
   app.use(createHealthRouter());
   app.use(
-    createWebhookRouter({ leadsRepo, failedEventsRepo, metaClient, questionsConfig, verifyToken, appSecret, settingsRepo }),
+    createWebhookRouter({
+      leadsRepo,
+      failedEventsRepo,
+      metaClient,
+      questionsConfig,
+      verifyToken,
+      appSecret,
+      settingsRepo,
+      sleep,
+      random,
+    }),
   );
   app.use(createAuthRouter({ ownerUsername, ownerPassword }));
   app.use(createLeadsRouter({ leadsRepo, settingsRepo }));
