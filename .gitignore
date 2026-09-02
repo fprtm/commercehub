@@ -1,0 +1,10 @@
+node_modules/
+.turbo/
+dist/
+.env
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/baileys-auth/
+npm-debug.log*

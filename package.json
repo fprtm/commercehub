@@ -1,0 +1,21 @@
+{
+  "name": "rimba-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Turborepo monorepo for Rimba client-delivery apps and shared packages.",
+  "workspaces": [
+    "apps/whatsapp-lead-capture/app",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "build": "turbo run build"
+  },
+  "devDependencies": {
+    "turbo": "^2.10.12"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
