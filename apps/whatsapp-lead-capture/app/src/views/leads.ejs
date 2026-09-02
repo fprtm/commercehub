@@ -26,6 +26,8 @@
     .answer { color: #444; }
     .answer.empty { color: #999; font-style: italic; }
     .matched-product { display: block; margin-top: 0.3rem; font-size: 0.82rem; color: #1e7d1e; }
+    .additional-notes { display: block; margin-top: 0.5rem; padding: 0.5rem 0.6rem; background: #fdf6e3; border-left: 3px solid #d8b34b; border-radius: 4px; font-size: 0.82rem; color: #6b5a2a; white-space: pre-line; }
+    .additional-notes-label { display: block; font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.03em; color: #8a7434; margin-bottom: 0.2rem; }
     .actions form { display: inline-block; margin-right: 0.4rem; }
     .actions button { padding: 0.35rem 0.7rem; font-size: 0.82rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
     .actions button:hover { background: #f0f0f0; }
@@ -94,6 +96,11 @@
               </td>
               <td class="answer <%= lead.question2_answer ? '' : 'empty' %>">
                 <%= lead.question2_answer || 'No answer yet' %>
+                <% if (lead.additional_notes) { %>
+                  <span class="additional-notes">
+                    <span class="additional-notes-label">Additional notes (after flow completed)</span><%= lead.additional_notes %>
+                  </span>
+                <% } %>
               </td>
               <td>
                 <span class="badge badge-<%= lead.status %>"><%= lead.status %></span>

@@ -28,6 +28,28 @@ CREATE TABLE IF NOT EXISTS leads (
   -- the existing new/responded/closed lifecycle instead of replacing it.
   matched_product TEXT,
   needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
+  -- Added for docs/sdd/changes/2026-09-02-capture-post-completion-messages.md
+  -- (FR-801..FR-803). `matched_product_score` persists the confidence score
+  -- (0-1, from src/services/productMatcher.js) behind whatever is currently
+  -- recorded in `matched_product` -- whether that came from the original Q1
+  -- answer or from a later post-completion message that raised it (FR-802:
+  -- "never let a later, lower-confidence message downgrade an existing good
+  -- match"). This has to be a persisted value, not something re-derived from
+  -- question1_answer on demand: once a post-completion message has updated
+  -- matched_product, the score behind it may no longer correspond to
+  -- question1_answer at all. NULL whenever matched_product is NULL (no
+  -- confident match recorded yet).
+  matched_product_score REAL,
+  -- `additional_notes` (FR-801): an append-only, timestamped running log of
+  -- every inbound message that arrives after this Lead's automated flow has
+  -- already resolved it to NO_OP (both questions answered, fallback already
+  -- triggered, or status already responded/closed -- see
+  -- src/services/inboundMessageProcessor.js for the exact NO_OP-reason scope
+  -- this applies to, and why). Previously these messages were fully dropped,
+  -- with no record anywhere -- this column is the fix for that. Deliberately
+  -- unbounded/untrimmed (out of scope to bound, per the change doc, given
+  -- this project's demo scale).
+  additional_notes TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );

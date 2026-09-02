@@ -874,6 +874,85 @@ the customer") — and it's exactly the same non-blocking design that makes
 routing a detected false positive to `needs_review` (rather than trying to
 silently "fix" the reply) the correct, safe response to this bug class too.
 
+## Never dropping a message, even after the flow completes (FR-801..FR-803)
+
+`docs/sdd/changes/2026-09-02-capture-post-completion-messages.md`. Root-caused
+via a real live test: once both qualifying questions are answered,
+`stateMachine.js` resolves every further inbound message from that phone
+number to `NO_OP` — correctly, no automated reply is sent (the scripted flow
+is genuinely finished) — but before this change, that also meant the message
+was dropped completely: no reply, no Lead update, no record it ever arrived.
+In the live test, the customer's actual product mention ("kaos rimba")
+arrived as a 3rd/4th message, after two earlier, low-content messages had
+already filled Q1/Q2, and was silently lost.
+
+- **`additional_notes`** (new nullable `TEXT` column on `leads`) — an
+  append-only, timestamped running log. A post-completion message is now
+  appended as `[<ISO-8601 timestamp>] <message text>`, never overwriting or
+  truncating earlier notes, and shown on the dashboard under the Q2 answer in
+  a visually distinct amber callout (clearly "extra context," not part of the
+  structured Q&A).
+- The fuzzy product matcher (see "Fuzzy product matching" above) is re-run
+  against every post-completion message too. If it produces a **strictly
+  higher** confidence score than whatever's currently backing
+  `matched_product` (persisted alongside it in a new `matched_product_score`
+  `REAL` column — see that column's doc comment in `src/db/schema.sql` for
+  why the score itself has to be stored rather than recomputed on demand), the
+  stored match is updated. A later, equal-or-lower-confidence message never
+  downgrades — or sideways-replaces — an existing good match.
+- Any post-completion message with usable text sets `needs_review = true` —
+  **for the two non-terminal `NO_OP` reasons only** (`flow_already_complete`,
+  `fallback_already_triggered`) — even if that same message also produced a
+  confident product match, because an ongoing conversation on a still-open
+  lead always deserves a fresh look from the owner, not a silent database
+  update. See the post-review scoping note below for why a closed/responded
+  lead is deliberately excluded from this.
+- **No new automated reply is ever sent for these messages** — this is a
+  data-capture fix only; `decision.replies` stays `[]` for every applicable
+  case, unchanged.
+
+**Judgment call — which `NO_OP` reasons this applies to:** `stateMachine.js`
+resolves to `NO_OP` for three distinct reasons: both questions already
+answered (`flow_already_complete` — the case the live test hit), fallback
+already triggered (`fallback_already_triggered`), and the owner having
+already marked the lead `responded`/`closed` (`lead_status_responded` /
+`lead_status_closed`). **`additional_notes` capture (FR-801) applies to all
+of them** — the change doc's own examples are all `flow_already_complete`,
+but its stated intent — "never silently drop a message" — does not carve out
+an exception for the other reasons: a customer writing back after fallback
+already fired, or after the owner closed their lead, is exactly as real and
+exactly as easy to lose as one that arrives one message earlier. Gated on the
+message actually carrying usable text (`stateMachine.js`'s own
+`hasUsableText` check) — a non-text message (sticker/image/empty body) has
+nothing to append or match, so it remains a true no-op exactly as before.
+
+**Post-review scoping fix — `needs_review` is NOT forced for closed/responded
+leads:** an earlier version of this change force-set `needs_review = true`
+for every `NO_OP` reason, including `lead_status_closed`. Independent review
+caught that this creates a state that was never reachable before: `closed`
+is intentionally terminal (`leadsRepo.updateStatus()` blocks any transition
+away from it) and `leads.ejs` shows zero action buttons for a closed lead
+("No further action") — so a closed lead flagged "needs review" would stay
+that way **forever**, with no escape hatch, and the badge's "unmatched
+product" wording would be actively misleading (the actual issue has nothing
+to do with matching). The fix: `additional_notes` capture still happens for
+every `NO_OP` reason (data is never lost — that part of FR-801 is unchanged),
+but `needs_review` is only force-set to `true` for the two non-terminal
+reasons. For `lead_status_responded`/`lead_status_closed`, `needs_review` is
+left exactly as it already was — not forced true, and not force-cleared
+either.
+
+**Existing DB files:** `CREATE TABLE IF NOT EXISTS` in `src/db/schema.sql`
+does not retroactively add columns to a `leads` table that already existed
+before this change — every prior column added to `leads` got away without an
+explicit migration step only because the physical DB file happened to be
+recreated by hand each time. `src/db/index.js` now checks for
+(`matched_product_score`, `additional_notes`) via `PRAGMA table_info(leads)`
+on every `createDb()` call and `ALTER TABLE ADD COLUMN`s any that are
+missing — idempotent, negligible cost, and safe to run against a DB file with
+real rows already in it (verified against a copy of this project's own
+`data/leads.db`).
+
 ## Dual WhatsApp mode: Cloud API vs. Baileys
 
 This app can talk to WhatsApp two ways, picked once at boot via

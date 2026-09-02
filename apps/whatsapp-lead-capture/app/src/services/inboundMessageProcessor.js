@@ -1,6 +1,6 @@
 'use strict';
 
-const { decideNextAction, ACTIONS } = require('./stateMachine');
+const { decideNextAction, ACTIONS, hasUsableText } = require('./stateMachine');
 const { log } = require('../utils/logger');
 const { sendWithHumanizedTiming } = require('../lib/humanizedTiming');
 const { matchProduct } = require('./productMatcher');
@@ -201,15 +201,105 @@ function createInboundMessageProcessor({
           // the only addition is recording the matched product name.
           lead = leadsRepo.updateProductMatch(lead.id, {
             matchedProduct: matchResult.product.name,
+            matchedProductScore: matchResult.score,
             needsReview: false,
           });
         } else {
           // FR-504: below threshold (including "no match found" -- score
           // 0, or the empty-catalog case above) -- suppress this turn's Q2
           // prompt and flag the lead for manual review.
-          lead = leadsRepo.updateProductMatch(lead.id, { matchedProduct: null, needsReview: true });
+          lead = leadsRepo.updateProductMatch(lead.id, { matchedProduct: null, matchedProductScore: null, needsReview: true });
           replies = [];
         }
+      }
+
+      // FR-801..FR-803 (docs/sdd/changes/2026-09-02-capture-post-completion-messages.md):
+      // stateMachine.js resolves ANY further message from a Lead it already
+      // considers resolved -- both questions answered
+      // ('flow_already_complete'), fallback already triggered
+      // ('fallback_already_triggered'), or the owner already marked the
+      // lead 'responded'/'closed' (`lead_status_${status}`) -- to NO_OP:
+      // zero replies, and (before this change) zero record of the message
+      // ever having existed. That last part is the bug: a real customer's
+      // actual product question ("spill harga kaos rimba nya dong") arrived
+      // as a post-completion message and was silently lost.
+      //
+      // Judgment call: this fix applies to EVERY NO_OP reason, not just
+      // 'flow_already_complete' (the one the real bug report happened to
+      // hit). The change doc's own examples are all
+      // 'flow_already_complete', but its stated intent -- "never silently
+      // drop a message" -- draws no principled line at the other NO_OP
+      // reasons: a customer writing back after the owner marked their lead
+      // 'responded', or after fallback already fired, is exactly as real
+      // and exactly as easy to lose as one that arrives one message earlier
+      // (before Q1/Q2 wrapped up). Applying it uniformly is also simpler to
+      // reason about than re-litigating "drop or capture" per reason string
+      // -- one condition (`decision.action === ACTIONS.NO_OP && lead`)
+      // covers all of them.
+      //
+      // Gated on `hasUsableText(messageBody)` -- the same bar the state
+      // machine itself already uses to decide whether an inbound message
+      // carries anything worth acting on. A non-text message (sticker/
+      // image/empty body) has no text to append to the log or fuzzy-match
+      // against the catalog, so it's left exactly as before: genuinely
+      // NO_OP, nothing recorded (consistent with how non-text messages are
+      // treated everywhere else in the flow -- they never get stored raw).
+      if (decision.action === ACTIONS.NO_OP && lead && hasUsableText(messageBody)) {
+        // Post-review fix (Medium finding): 'lead_status_responded' /
+        // 'lead_status_closed' are terminal -- leadsRepo.updateStatus()
+        // blocks any transition away from 'closed', and leads.ejs shows
+        // zero action buttons for a closed lead ("No further action").
+        // Force-flagging needs_review=true here would create a
+        // permanently-stuck, self-contradictory dashboard state that
+        // wasn't reachable before this change: "needs review" with no way
+        // to ever clear it, and a misleading "unmatched product" badge for
+        // an issue that has nothing to do with matching. So FR-803's
+        // unconditional needs_review=true is scoped to the two NON-terminal
+        // NO_OP reasons only (flow_already_complete,
+        // fallback_already_triggered, i.e. NOT starting with
+        // 'lead_status_') -- those are still-open leads where the flag is
+        // genuinely actionable. FR-801's additional_notes capture still
+        // applies to EVERY NO_OP reason, including closed/responded --
+        // data is never lost, only the needs_review side-effect is scoped
+        // down.
+        const isTerminalStatusReason = typeof decision.reason === 'string' && decision.reason.startsWith('lead_status_');
+        const noteTimestamp = (timestamp ? new Date(timestamp) : new Date()).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        lead = leadsRepo.appendAdditionalNote(lead.id, `[${noteTimestamp}] ${messageBody}`, {
+          needsReview: !isTerminalStatusReason,
+        });
+
+        // FR-802: re-run the fuzzy matcher against this later message too.
+        // Only adopted if it's a STRICTLY better match than whatever's
+        // currently stored (`matched_product_score`) -- see that column's
+        // schema.sql doc comment for why the comparison is against a
+        // persisted score rather than one re-derived from
+        // question1_answer (the currently-stored match may itself have
+        // come from an earlier post-completion message, not Q1).
+        // `currentScore === null` (no confident match recorded yet, at any
+        // point) always loses to any confident new match.
+        if (Array.isArray(catalog)) {
+          const postCompletionMatch = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
+          const currentScore = typeof lead.matched_product_score === 'number' ? lead.matched_product_score : null;
+          if (postCompletionMatch.matched && (currentScore === null || postCompletionMatch.score > currentScore)) {
+            lead = leadsRepo.updateProductMatch(lead.id, {
+              matchedProduct: postCompletionMatch.product.name,
+              matchedProductScore: postCompletionMatch.score,
+              // FR-803, same terminal-status scoping as the note append
+              // above: true for the two non-terminal reasons (even on a
+              // confident match found right here -- an ongoing
+              // conversation after the scripted flow ended always warrants
+              // a fresh look, not a silent database update), but for a
+              // closed/responded lead, preserve whatever needs_review
+              // already was instead of force-setting it.
+              needsReview: isTerminalStatusReason ? Boolean(lead.needs_review) : true,
+            });
+          }
+        }
+        // NFR-802: deliberately no touch of `replies` anywhere above --
+        // decision.replies for every NO_OP action is already `[]` from
+        // stateMachine.js, and nothing in this block pushes into it. This
+        // change is data capture only; the send loop below still sends
+        // nothing for this message.
       }
 
       // FR-402/NFR-401: read fresh on every call, no caching -- a toggle

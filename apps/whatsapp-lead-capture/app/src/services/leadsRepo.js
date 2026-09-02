@@ -37,7 +37,45 @@ function createLeadsRepo(db) {
   const updateProductMatch = db.prepare(`
     UPDATE leads
     SET matched_product = @matched_product,
+        matched_product_score = @matched_product_score,
         needs_review = @needs_review,
+        updated_at = @updated_at
+    WHERE id = @id
+  `);
+  // FR-801/FR-803 (docs/sdd/changes/2026-09-02-capture-post-completion-messages.md):
+  // append-only -- the CASE keeps the column NULL-safe (SQL `NULL || x` is
+  // NULL, which would silently swallow the first note) without needing a
+  // read-modify-write round trip from the caller, and never truncates or
+  // overwrites whatever's already there.
+  //
+  // Two variants of the same statement, differing only in whether
+  // needs_review is forced to 1: post-review fix (Medium finding) --
+  // force-flagging needs_review on a closed/responded lead (terminal --
+  // leadsRepo.updateStatus() blocks any transition away from 'closed', and
+  // the dashboard shows zero action buttons for one) created a permanently
+  // stuck, self-contradictory dashboard state with no escape hatch. FR-803's
+  // unconditional needs_review=true is therefore scoped to the two
+  // NON-terminal NO_OP reasons only (flow_already_complete,
+  // fallback_already_triggered); a closed/responded lead still gets the
+  // note appended (FR-801: data is never lost) but needs_review is left
+  // exactly as it was. See inboundMessageProcessor.js for which reason
+  // selects which variant.
+  const appendAdditionalNoteAndFlag = db.prepare(`
+    UPDATE leads
+    SET additional_notes = CASE
+          WHEN additional_notes IS NULL OR additional_notes = '' THEN @note_line
+          ELSE additional_notes || char(10) || @note_line
+        END,
+        needs_review = 1,
+        updated_at = @updated_at
+    WHERE id = @id
+  `);
+  const appendAdditionalNoteOnly = db.prepare(`
+    UPDATE leads
+    SET additional_notes = CASE
+          WHEN additional_notes IS NULL OR additional_notes = '' THEN @note_line
+          ELSE additional_notes || char(10) || @note_line
+        END,
         updated_at = @updated_at
     WHERE id = @id
   `);
@@ -101,16 +139,47 @@ function createLeadsRepo(db) {
      * src/services/productMatcher.js). Called at most once per Q1 answer,
      * from inboundMessageProcessor.js, right after that answer is saved.
      *
+     * Also reused, unmodified in shape, by the FR-802 post-completion
+     * re-match path in inboundMessageProcessor.js -- see
+     * `matched_product_score`'s schema.sql doc comment for why that path
+     * always passes `matchedProductScore` too (and always `needsReview:
+     * true`, per FR-803).
+     *
      * @param {number} id
-     * @param {{ matchedProduct: string|null, needsReview: boolean }} params
+     * @param {{ matchedProduct: string|null, matchedProductScore?: number|null, needsReview: boolean }} params
      */
-    updateProductMatch(id, { matchedProduct, needsReview }) {
+    updateProductMatch(id, { matchedProduct, matchedProductScore, needsReview }) {
       updateProductMatch.run({
         id,
         matched_product: matchedProduct || null,
+        matched_product_score: typeof matchedProductScore === 'number' ? matchedProductScore : null,
         needs_review: needsReview ? 1 : 0,
         updated_at: new Date().toISOString(),
       });
+      return findById.get(id);
+    },
+
+    /**
+     * FR-801/FR-803: appends a timestamped line to the running
+     * `additional_notes` log for a message that arrived after this Lead's
+     * automated flow already resolved it to NO_OP. See
+     * inboundMessageProcessor.js for the exact NO_OP-reason scope this is
+     * called for.
+     *
+     * @param {number} id
+     * @param {string} noteLine - already fully formatted, e.g.
+     *   "[2026-09-02T07:14:00Z] spill harga kaos rimba nya dong"
+     * @param {{ needsReview?: boolean }} [options] - post-review fix
+     *   (Medium finding): defaults to `true` (FR-803's original behavior --
+     *   flags the Lead for a fresh manual look). Pass `false` for the
+     *   lead_status_responded/lead_status_closed NO_OP reasons specifically
+     *   -- those leads are terminal, so needs_review is left untouched
+     *   instead of being force-set, avoiding a permanently-stuck
+     *   "needs review, but no further action possible" dashboard state.
+     */
+    appendAdditionalNote(id, noteLine, { needsReview = true } = {}) {
+      const stmt = needsReview ? appendAdditionalNoteAndFlag : appendAdditionalNoteOnly;
+      stmt.run({ id, note_line: noteLine, updated_at: new Date().toISOString() });
       return findById.get(id);
     },
 
