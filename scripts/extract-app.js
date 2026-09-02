@@ -122,16 +122,13 @@ function copyTreeExcluding(srcDir, destDir, opts = {}) {
   return { skipped, copiedCount };
 }
 
-/** Finds the app's real package root: apps/<app-name>/app if that has a
- * package.json (this repo's own convention -- see TICKET-1102's git-history
- * preservation note for why the app is nested one level under an `app/`
- * folder), else apps/<app-name> directly. */
+/** Finds the app's real package root: apps/<app-name> directly (the app's
+ * package.json, src/, tests/, etc. live as direct children of its apps/
+ * folder -- there is no nested `app/` subfolder). */
 function resolveAppDir(appName) {
-  const nested = path.join(APPS_DIR, appName, 'app');
-  if (fs.existsSync(path.join(nested, 'package.json'))) return nested;
   const direct = path.join(APPS_DIR, appName);
   if (fs.existsSync(path.join(direct, 'package.json'))) return direct;
-  throw new Error(`Could not find a package.json for app "${appName}" under ${APPS_DIR} (looked in "${nested}" and "${direct}")`);
+  throw new Error(`Could not find a package.json for app "${appName}" under ${APPS_DIR} (looked in "${direct}")`);
 }
 
 /** Every packages/* directory's own package.json name -> directory name,
