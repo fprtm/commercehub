@@ -23,5 +23,11 @@ Started with feature 002 — feature 001's tickets (numbered 1101 through 1109, 
 | SEC-1304 | specs/002-telegram-multichannel/threats.md | TICKET-1304 (shared inboundMessageProcessor already treats inbound text as untrusted; accepted, no new handling) |
 | SEC-1305 | specs/002-telegram-multichannel/threats.md | TICKET-1305 (stores `file_id` reference only, never downloads bytes) |
 | SEC-1306 | specs/002-telegram-multichannel/threats.md | TICKET-1304 (accepted risk, same class as WA, per Decision 001) |
+| FSD-003 | specs/003-credentials-in-db/fsd.md | `changes/2026-09-03-credentials-in-db.md` FR-1401–1406 (no ticket decomposition — medium scope, single change doc is the delivery record) |
+| SEC-1401 | specs/003-credentials-in-db/threats.md | FR-1402/FR-1403 (`requireAuth` gate on both credentials routes) |
+| SEC-1402 | specs/003-credentials-in-db/threats.md | FR-1402 (secrets never rendered back into HTML, set/not-set booleans only) |
+| SEC-1403 | specs/003-credentials-in-db/threats.md | FR-1401 (accepted: plaintext at rest, same trust boundary as OWNER_PASSWORD) |
+| SEC-1404 | specs/003-credentials-in-db/threats.md | FR-1406 (`appSecretRequired`, post-review fix) |
+| SEC-1405 | specs/003-credentials-in-db/threats.md | FR-1403 (`credentials_updated` log event never logs values) |
 
 Next free ticket ID: **TICKET-1401**.
