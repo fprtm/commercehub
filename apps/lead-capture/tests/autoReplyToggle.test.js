@@ -76,13 +76,13 @@ test('FR-402 (unit): auto_reply_enabled=false -- inbound message still creates a
 
   const phone = '628999900001';
   await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'halo, baju ini masih ada?',
     messageType: 'text',
     channel: 'whatsapp_cloud_api',
   });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.ok(lead, 'a Lead row must still be created while auto-reply is OFF');
   assert.equal(lead.status, 'new');
   assert.equal(lead.question1_answer, null);
@@ -112,8 +112,8 @@ test('FR-402 (unit): same bookkeeping (createLead + leadPatch) runs whether auto
       sleep: async () => {}, // NFR-603, see comment above
     });
     const phone = autoReplyEnabled ? '628999900010' : '628999900011';
-    await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-    const lead = leadsRepo.findByPhone(phone);
+    await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+    const lead = leadsRepo.findByContact(phone, 'whatsapp');
     db.close();
     return { lead, sentCount: sent.length };
   }
@@ -210,7 +210,7 @@ test('FR-402: a message received over the real webhook while OFF creates a Lead 
     });
     assert.equal(res.status, 200);
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.ok(lead, 'Lead must still be created while auto-reply is OFF');
     assert.equal(lead.status, 'new');
 
@@ -262,7 +262,7 @@ test('FR-402: toggling back ON does not retroactively message a customer whose m
     );
 
     // The Lead itself is untouched/unresent too.
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.equal(lead.status, 'new');
   } finally {
     await ctx.close();
@@ -304,7 +304,7 @@ test('FR-402: a second, later message from the same phone after re-enabling gets
     assert.equal(ctx.metaClient.sentMessages.length, 1, 'the answer to the pending question should now be sent normally');
     assert.equal(ctx.metaClient.sentMessages[0].body, 'What size / how should we contact you?');
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.equal(lead.question1_answer, 'Kaos Rimba Hitam');
   } finally {
     await ctx.close();
@@ -324,7 +324,7 @@ test('FR-403 (explicit regression): with auto-reply left at its default (ON), a 
     });
     assert.equal(res.status, 200);
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.ok(lead);
     assert.equal(ctx.metaClient.sentMessages.length, 2);
     assert.match(ctx.metaClient.sentMessages[0].body, /automated reply from Rimba Apparel/);

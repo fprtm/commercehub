@@ -6,6 +6,34 @@ const { sendWithHumanizedTiming } = require('@rimba/humanized-timing');
 const { matchProduct } = require('@rimba/product-matcher');
 
 /**
+ * TICKET-1302 (docs/sdd/specs/002-telegram-multichannel/erd.md): maps this
+ * module's own `channel` param -- the finer-grained connector MODE
+ * ('whatsapp_cloud_api' | 'whatsapp_baileys' today, used only for
+ * logging/FailedEvent attribution, per FR-305 of
+ * docs/sdd/changes/2026-09-01-baileys-dual-mode.md) -- onto the coarser
+ * channel-FAMILY value the `leads.channel` DB column actually stores
+ * ('whatsapp' | 'telegram', per erd.md). These are deliberately different
+ * vocabularies: Decision 001 §1 treats "channel" as a Lead attribute
+ * describing which messaging platform a contact used, not which connector
+ * implementation handled it -- the mode distinction (Cloud API vs Baileys)
+ * is purely a WhatsApp-side operational detail the Lead itself has no
+ * reason to know about. Both WhatsApp modes therefore collapse to the same
+ * family; any other value (e.g. 'telegram', once TICKET-1303's connector
+ * starts calling in) is assumed to already be a valid family value and is
+ * passed through unchanged -- this function's only job is normalizing the
+ * two known WhatsApp-mode strings, not validating every possible input.
+ *
+ * @param {string} channel - the mode-specific value passed into
+ *   `processInboundMessage()`.
+ * @returns {string} the channel-family value to persist via
+ *   `leadsRepo.create()`.
+ */
+function toLeadChannel(channel) {
+  if (channel === 'whatsapp_cloud_api' || channel === 'whatsapp_baileys') return 'whatsapp';
+  return channel;
+}
+
+/**
  * FR-901 (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md, Bug 1,
  * safety-critical): matching only ever scores the ACTIVE product pool
  * (`productsRepo.listActive()`) -- so deactivating a product can silently
@@ -77,7 +105,7 @@ function guardAgainstInactiveFullCatalogWinner(matchResult, text, { productsRepo
  * @param {object} deps
  * @param {ReturnType<typeof import('./leadsRepo').createLeadsRepo>} deps.leadsRepo
  * @param {object} deps.questionsConfig - loaded config/questions.json
- * @param {(phoneNumber: string, text: string) => Promise<unknown>} deps.sendTextMessage
+ * @param {(contactId: string, text: string) => Promise<unknown>} deps.sendTextMessage
  *   - the outbound half of FR-302's shared contract. Both metaClient and the
  *   Baileys connector expose a function with this exact shape, so this
  *   module never needs to know which one it's talking to.
@@ -89,14 +117,14 @@ function guardAgainstInactiveFullCatalogWinner(matchResult, text, { productsRepo
  *   processor without it (there are several) keeps working completely
  *   unmodified -- same additive-parameter pattern already used for
  *   `channel` above.
- * @param {(phoneNumber: string, messageId: string|undefined) => Promise<unknown>} [deps.markAsRead]
+ * @param {(contactId: string, messageId: string|undefined) => Promise<unknown>} [deps.markAsRead]
  *   - FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
  *   the connector-specific "mark this inbound message as read" primitive
  *   (metaClient.markAsRead / baileysConnector.markAsRead). Optional and
  *   defaults to a no-op so every pre-existing caller/test that constructs
  *   this processor without it keeps working unmodified -- same
  *   additive-parameter pattern as `settingsRepo` above.
- * @param {(phoneNumber: string, messageId: string|undefined) => Promise<unknown>} [deps.sendTypingIndicator]
+ * @param {(contactId: string, messageId: string|undefined) => Promise<unknown>} [deps.sendTypingIndicator]
  *   - FR-601/FR-603: the connector-specific "show typing" primitive.
  *   Optional, defaults to a no-op, same reasoning as `markAsRead` above.
  * @param {(ms: number) => Promise<unknown>} [deps.sleep] - injectable delay
@@ -169,10 +197,15 @@ function createInboundMessageProcessor({
   return {
     /**
      * @param {object} params
-     * @param {string} params.phoneNumber - phone number in the same format
-     *   leadsRepo/Lead rows already use (no leading '+', digits only --
-     *   matches Meta's format; the Baileys adapter normalizes its JIDs to
-     *   this same shape before calling in).
+     * @param {string} params.contactId - contact identifier in the same
+     *   format leadsRepo/Lead rows already use for this channel (for
+     *   WhatsApp: no leading '+', digits only -- matches Meta's format; the
+     *   Baileys adapter normalizes its JIDs to this same shape before
+     *   calling in. For Telegram, once TICKET-1303 lands: the chat_id,
+     *   stringified). TICKET-1302: renamed from `phoneNumber` -- this was
+     *   always "whatever identifies this contact on this channel", never
+     *   guaranteed to be a literal phone number even before Telegram
+     *   support existed (see leadsRepo.js's findByContact()).
      * @param {string|null} params.messageBody - inbound text, or null for a
      *   non-text message type (image/sticker/etc).
      * @param {string} params.messageType - e.g. 'text', 'sticker', 'image'.
@@ -185,7 +218,13 @@ function createInboundMessageProcessor({
      *   seconds as a string; Baileys: unix seconds as a number) into ISO
      *   before calling in. Falls back to "now" if omitted.
      * @param {string} [params.channel] - 'whatsapp_cloud_api' |
-     *   'whatsapp_baileys', purely for logging/FailedEvent attribution.
+     *   'whatsapp_baileys' (today), purely for logging/FailedEvent
+     *   attribution -- NOT the same vocabulary as the `leads.channel` DB
+     *   column. TICKET-1302: this mode-specific value is now ALSO mapped
+     *   (via `toLeadChannel()` above) down to the coarser channel-family
+     *   value ('whatsapp' | 'telegram') and persisted to
+     *   `leadsRepo.create()` -- previously it was logged only, never
+     *   stored.
      * @param {string} [params.messageId] - FR-601: the inbound message's own
      *   id (Meta's WAMID, or Baileys' `msg.key.id`), threaded through to
      *   `markAsRead`/`sendTypingIndicator` below so the read receipt/typing
@@ -193,14 +232,15 @@ function createInboundMessageProcessor({
      *   reply. Optional -- if omitted, markAsRead simply has nothing to mark.
      */
     async processInboundMessage({
-      phoneNumber,
+      contactId,
       messageBody,
       messageType,
       timestamp,
       channel = 'whatsapp_cloud_api',
       messageId,
     }) {
-      const existingLead = leadsRepo.findByPhone(phoneNumber);
+      const dbChannel = toLeadChannel(channel);
+      const existingLead = leadsRepo.findByContact(contactId, dbChannel);
       // FR-1001/FR-1003/FR-1005 (docs/sdd/changes/2026-09-02-numbered-product-selection.md):
       // computed here, BEFORE decideNextAction(), rather than after (as it
       // used to be, right before the fuzzy-matching block below) -- the
@@ -221,7 +261,8 @@ function createInboundMessageProcessor({
       let lead = existingLead;
       if (decision.createLead) {
         lead = leadsRepo.create({
-          phoneNumber,
+          contactId,
+          channel: dbChannel,
           firstMessageAt: timestamp || new Date().toISOString(),
         });
       }
@@ -447,7 +488,7 @@ function createInboundMessageProcessor({
         // with no real human-behavior justification). Each reply below
         // still gets its own full typing-indicator + length-proportional
         // delay -- only the already-fired markAsRead is a no-op there.
-        if (markAsRead) await markAsRead(phoneNumber, messageId);
+        if (markAsRead) await markAsRead(contactId, messageId);
 
         for (const replyText of replies) {
           // eslint-disable-next-line no-await-in-loop -- messages must go out in this exact order
@@ -457,9 +498,9 @@ function createInboundMessageProcessor({
             random,
             markAsRead: async () => {}, // already fired once, above, for this inbound message
             sendTypingIndicator: async () => {
-              if (sendTypingIndicator) await sendTypingIndicator(phoneNumber, messageId);
+              if (sendTypingIndicator) await sendTypingIndicator(contactId, messageId);
             },
-            sendMessage: (text) => sendTextMessage(phoneNumber, text),
+            sendMessage: (text) => sendTextMessage(contactId, text),
           });
         }
       }

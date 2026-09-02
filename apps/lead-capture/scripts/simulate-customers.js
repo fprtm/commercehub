@@ -175,7 +175,7 @@ async function main() {
    * Sends exactly ONE inbound message through the real processor and
    * captures what actually happened as a result of THIS message only.
    */
-  async function sendMessage(phoneNumber, body, { messageType = 'text', channel = 'whatsapp_baileys' } = {}) {
+  async function sendMessage(contactId, body, { messageType = 'text', channel = 'whatsapp_baileys' } = {}) {
     const beforeSent = sentLog.length;
     const beforeRead = readLog.length;
     const beforeTyping = typingLog.length;
@@ -183,7 +183,7 @@ async function main() {
     const timestamp = new Date().toISOString();
 
     const result = await processInboundMessage({
-      phoneNumber,
+      contactId,
       messageBody: body,
       messageType,
       timestamp,
@@ -239,9 +239,9 @@ async function main() {
       phone,
       expectation: 'FR-1002: matched_product = Kaos Rimba Navy, matched_product_score = 1.0, needs_review=false, both answers saved.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead1 = leadsRepo.findByPhone(phone);
+    const lead1 = leadsRepo.findByContact(phone, 'whatsapp');
     check(1, 'FR-1002: numbered reply "4" deterministically selects Kaos Rimba Navy', lead1.matched_product, 'Kaos Rimba Navy');
     check(1, 'NFR-1002: score is exactly 1.0 (no fuzzy scoring involved)', lead1.matched_product_score, 1.0);
     check(1, 'needs_review is false', Boolean(lead1.needs_review), false);
@@ -270,13 +270,13 @@ async function main() {
       expectation:
         'additional_notes captures the 3rd message, matched_product upgrades to Kaos Rimba Hitam, needs_review=true.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
     // NFR-902 target scenario for FR-902 (Bug 2 data fix -- the bare "kaos"
     // alias on Navy used to tie against "Kaos Rimba Hitam"'s own full
     // name, resolving the 3rd message as ambiguous/no-match instead of
     // upgrading to Hitam).
-    const lead2 = leadsRepo.findByPhone(phone);
+    const lead2 = leadsRepo.findByContact(phone, 'whatsapp');
     check(2, 'additional_notes captures the post-completion message', lead2.additional_notes, (v) => Boolean(v) && v.includes('kaos rimba hitam'));
     check(2, 'FR-902: matched_product upgrades to Kaos Rimba Hitam (bare "kaos" alias no longer shadows it)', lead2.matched_product, 'Kaos Rimba Hitam');
     check(2, 'needs_review is true (post-completion message always re-flagged)', Boolean(lead2.needs_review), true);
@@ -296,9 +296,9 @@ async function main() {
       phone,
       expectation: 'needs_review=true, NOT a confident match despite containing a real product name.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead3 = leadsRepo.findByPhone(phone);
+    const lead3 = leadsRepo.findByContact(phone, 'whatsapp');
     check(3, 'no confident match despite naming the product', lead3.matched_product, null);
     check(3, 'needs_review is true (intent denylist)', Boolean(lead3.needs_review), true);
   }
@@ -317,9 +317,9 @@ async function main() {
       phone,
       expectation: 'still fuzzy-matches the Navy product via typo tolerance.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead4 = leadsRepo.findByPhone(phone);
+    const lead4 = leadsRepo.findByContact(phone, 'whatsapp');
     check(4, 'typo "nvy" still fuzzy-matches Kaos Rimba Navy', lead4.matched_product, 'Kaos Rimba Navy');
     check(4, 'needs_review is false', Boolean(lead4.needs_review), false);
   }
@@ -338,9 +338,9 @@ async function main() {
       phone,
       expectation: 'needs_review=true, no match.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead5 = leadsRepo.findByPhone(phone);
+    const lead5 = leadsRepo.findByContact(phone, 'whatsapp');
     check(5, 'no match for an off-catalog product', lead5.matched_product, null);
     check(5, 'needs_review is true', Boolean(lead5.needs_review), true);
   }
@@ -369,9 +369,9 @@ async function main() {
         'lead\'s pending question, which does not exist yet on message 1. The 2nd (real text) message then answers ' +
         'Q1 normally. Not a crash either way.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead6 = leadsRepo.findByPhone(phone);
+    const lead6 = leadsRepo.findByContact(phone, 'whatsapp');
     check(6, 'sticker-with-no-caption as the very first contact does not crash and starts the flow', turns[0].action, 'START_FLOW');
     check(6, 'follow-up text message answers Q1 normally', lead6.matched_product, 'Kaos Rimba Navy');
   }
@@ -392,9 +392,9 @@ async function main() {
       phone,
       expectation: 'same post-completion capture/upgrade behavior as scenario 2, under messier filler conditions.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead7 = leadsRepo.findByPhone(phone);
+    const lead7 = leadsRepo.findByContact(phone, 'whatsapp');
     check(7, 'additional_notes captures the post-completion message', lead7.additional_notes, (v) => Boolean(v) && v.includes('kaos rimba navy'));
     check(7, 'matched_product set from the post-completion message', lead7.matched_product, 'Kaos Rimba Navy');
     check(7, 'needs_review is true', Boolean(lead7.needs_review), true);
@@ -415,9 +415,9 @@ async function main() {
       expectation:
         'Lead exists, status=new, question2_answer=null, matched_product set from Q1 -- partial state looks sane, not broken.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead8 = leadsRepo.findByPhone(phone);
+    const lead8 = leadsRepo.findByContact(phone, 'whatsapp');
     check(8, 'lead exists with status=new', lead8.status, 'new');
     check(8, 'question2_answer still null (customer went silent)', lead8.question2_answer, null);
     check(8, 'matched_product set from Q1', lead8.matched_product, 'Kaos Rimba Navy');
@@ -436,7 +436,7 @@ async function main() {
 
     // Manually close the lead via the REAL leadsRepo.updateStatus, exactly
     // like an owner clicking "Close" on the dashboard would.
-    const leadBeforeClose = leadsRepo.findByPhone(phone);
+    const leadBeforeClose = leadsRepo.findByContact(phone, 'whatsapp');
     const closedLead = leadsRepo.updateStatus(leadBeforeClose.id, 'closed');
     console.log(`  [scenario 9] Manually closed lead id=${closedLead.id}, status now "${closedLead.status}"`);
 
@@ -451,13 +451,13 @@ async function main() {
       expectation:
         'additional_notes captures the new message, needs_review is NOT force-flagged (preserves whatever it was), and NO new outbound reply is generated (no reply spam to a closed lead).',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
       extra: {
         needsReviewBeforeClose: Boolean(leadBeforeClose.needs_review),
         outboundSendsForReturnMessage: sentAfterReturn - sentBeforeReturn,
       },
     });
-    const lead9 = leadsRepo.findByPhone(phone);
+    const lead9 = leadsRepo.findByContact(phone, 'whatsapp');
     check(9, 'additional_notes captures the post-close message', lead9.additional_notes, (v) => Boolean(v) && v.includes('navy size S'));
     check(9, 'needs_review preserved (not force-flagged for a closed lead)', Boolean(lead9.needs_review), Boolean(leadBeforeClose.needs_review));
     check(9, 'zero new outbound sends to a closed lead', sentAfterReturn - sentBeforeReturn, 0);
@@ -477,9 +477,9 @@ async function main() {
       phone,
       expectation: 'clean, non-ambiguous match (Celana Rimba Cargo), not flagged ambiguous.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead10 = leadsRepo.findByPhone(phone);
+    const lead10 = leadsRepo.findByContact(phone, 'whatsapp');
     check(10, 'clean match to Celana Rimba Cargo', lead10.matched_product, 'Celana Rimba Cargo');
     check(10, 'needs_review is false', Boolean(lead10.needs_review), false);
   }
@@ -509,10 +509,10 @@ async function main() {
       phone,
       expectation: 'Lead is still created/logged correctly, but zero outbound sends recorded for this customer.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
       extra: { outboundSendsWhileOff: sentAfter - sentBefore },
     });
-    const lead11 = leadsRepo.findByPhone(phone);
+    const lead11 = leadsRepo.findByContact(phone, 'whatsapp');
     check(11, 'lead is still created/logged while auto-reply is OFF', Boolean(lead11), true);
     check(11, 'zero outbound sends while auto-reply is OFF', sentAfter - sentBefore, 0);
   }
@@ -531,9 +531,9 @@ async function main() {
       phone,
       expectation: 'does not crash; most likely no confident match -> needs_review=true.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead12 = leadsRepo.findByPhone(phone);
+    const lead12 = leadsRepo.findByContact(phone, 'whatsapp');
     check(12, 'English text does not crash and has no confident match', lead12.matched_product, null);
     check(12, 'needs_review is true', Boolean(lead12.needs_review), true);
   }
@@ -563,9 +563,9 @@ async function main() {
       phone,
       expectation: 'still matches the Navy product confidently despite the length (length-penalty tuning).',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead13 = leadsRepo.findByPhone(phone);
+    const lead13 = leadsRepo.findByContact(phone, 'whatsapp');
     const q1Text13 = lead13.question1_answer;
     // FR-904's OWN acceptance bar, checked directly and independently of
     // the length-penalty score below: does the intent denylist still flag
@@ -614,7 +614,7 @@ async function main() {
       phone,
       expectation: 'retry behavior, not a crash, not treated as a valid answer.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
     check(14, 'first whitespace-only message triggers RETRY (one follow-up attempt)', turns[1].action, 'RETRY');
     check(14, 'second whitespace-only message in a row triggers FALLBACK', turns[2].action, 'FALLBACK');
@@ -648,14 +648,14 @@ async function main() {
       phone,
       expectation: 'no match (inactive), needs_review=true -- inactive products genuinely excluded from matching.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
     // NFR-902 target scenario for FR-901 (Bug 1, safety-critical -- the
     // active-only pool used to let "Kaos Rimba Hitam" win this exact text
     // once Navy was deactivated, since 2 of Hitam's 3 name tokens still
     // matched; the full-catalog inactive-winner guard must force this to
     // no-match instead).
-    const lead15 = leadsRepo.findByPhone(phone);
+    const lead15 = leadsRepo.findByContact(phone, 'whatsapp');
     check(15, 'FR-901: no confident match to ANY product once the named product is deactivated', lead15.matched_product, null);
     check(15, 'FR-901: specifically not silently misrouted to Kaos Rimba Hitam', lead15.matched_product, (v) => v !== 'Kaos Rimba Hitam');
     check(15, 'needs_review is true', Boolean(lead15.needs_review), true);
@@ -684,9 +684,9 @@ async function main() {
       phone,
       expectation: 'FR-1002: deterministically selects Kaos Rimba Hitam, score=1.0. NFR-1003: Kaos Rimba Navy absent from the list shown (deactivated in scenario 15).',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead16 = leadsRepo.findByPhone(phone);
+    const lead16 = leadsRepo.findByContact(phone, 'whatsapp');
     check(16, 'FR-1002: tolerant "no 3" deterministically selects Kaos Rimba Hitam', lead16.matched_product, 'Kaos Rimba Hitam');
     check(16, 'NFR-1002: score is exactly 1.0 (no fuzzy scoring involved)', lead16.matched_product_score, 1.0);
     check(16, 'needs_review is false', Boolean(lead16.needs_review), false);
@@ -716,9 +716,9 @@ async function main() {
       phone,
       expectation: 'FR-1004: 1st out-of-range number retries with the same list; 2nd falls back -- identical shape to any other structurally-unusable reply.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead17 = leadsRepo.findByPhone(phone);
+    const lead17 = leadsRepo.findByContact(phone, 'whatsapp');
     check(17, 'FR-1004: 1st out-of-range number triggers RETRY (one follow-up attempt)', turns[1].action, 'RETRY');
     check(17, 'FR-1004: 2nd out-of-range number in a row triggers FALLBACK', turns[2].action, 'FALLBACK');
     check(17, 'no product was ever matched', lead17.matched_product, null);
@@ -748,9 +748,9 @@ async function main() {
       phone,
       expectation: 'FR-1005: Q1 is the original static prompt (config/questions.json), not a crash/empty list; NFR-502: empty catalog -> needs_review=true, matched_product=null.',
       turns,
-      finalLead: leadsRepo.findByPhone(phone),
+      finalLead: leadsRepo.findByContact(phone, 'whatsapp'),
     });
-    const lead18 = leadsRepo.findByPhone(phone);
+    const lead18 = leadsRepo.findByContact(phone, 'whatsapp');
     check(18, 'FR-1005: Q1 falls back to the original static free-text prompt', q1Turn.repliesSent[1], questionsConfig.questions[0].text);
     check(18, 'Q1 answer accepted as ordinary free text (no crash)', lead18.question1_answer, (v) => v !== null);
     check(18, 'NFR-502: empty catalog -> no match', lead18.matched_product, null);

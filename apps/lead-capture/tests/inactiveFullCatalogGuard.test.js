@@ -71,15 +71,15 @@ test('FR-901: deactivating "Kaos Rimba Navy" then sending its exact name must NO
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo });
 
   const phone = '628190000901';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
   await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'kaos rimba navy ada?',
     messageType: 'text',
     channel: 'whatsapp_baileys',
   });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, null, `must NOT confidently match anything, got ${lead.matched_product}`);
   assert.notEqual(lead.matched_product, 'Kaos Rimba Hitam', 'must specifically not be silently misrouted to Hitam');
   assert.equal(lead.needs_review, 1, 'needs_review must be true');
@@ -98,15 +98,15 @@ test('FR-901: the SAME text still matches confidently while the product is activ
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo });
 
   const phone = '628190000902';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
   await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'kaos rimba navy ada?',
     messageType: 'text',
     channel: 'whatsapp_baileys',
   });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, 'Kaos Rimba Navy');
   assert.equal(lead.needs_review, 0);
 
@@ -127,15 +127,15 @@ test('FR-901: reactivating the product afterwards restores normal matching on th
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo });
 
   const phone = '628190000903';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
   await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'kaos rimba navy ada?',
     messageType: 'text',
     channel: 'whatsapp_baileys',
   });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, 'Kaos Rimba Navy');
   assert.equal(lead.needs_review, 0);
 
@@ -153,9 +153,9 @@ test('FR-901: the guard also applies to the post-completion (FR-802) re-match pa
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo });
 
   const phone = '628190000904';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'ada apa aja', messageType: 'text', channel: 'whatsapp_baileys' }); // vague Q1
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'oke makasih', messageType: 'text', channel: 'whatsapp_baileys' }); // vague Q2, flow complete
+  await processInboundMessage({ contactId: phone, messageBody: 'Halo', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'ada apa aja', messageType: 'text', channel: 'whatsapp_baileys' }); // vague Q1
+  await processInboundMessage({ contactId: phone, messageBody: 'oke makasih', messageType: 'text', channel: 'whatsapp_baileys' }); // vague Q2, flow complete
 
   // Now deactivate Navy AFTER the flow is complete, then send a post-completion
   // message naming it -- the FR-802 re-match path must apply the same guard.
@@ -163,13 +163,13 @@ test('FR-901: the guard also applies to the post-completion (FR-802) re-match pa
   productsRepo.deactivate(navy.id);
 
   await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'eh btw kaos rimba navy ada?',
     messageType: 'text',
     channel: 'whatsapp_baileys',
   });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.notEqual(lead.matched_product, 'Kaos Rimba Hitam', 'post-completion re-match must also refuse to misroute to Hitam');
 
   db.close();

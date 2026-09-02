@@ -62,18 +62,51 @@ function createDb(dbPath) {
  */
 function ensureLeadsColumns(db) {
   const existingColumns = new Set(db.prepare('PRAGMA table_info(leads)').all().map((col) => col.name));
+
+  // TICKET-1302 (docs/sdd/specs/002-telegram-multichannel/erd.md): renames
+  // the Lead identity column phone_number -> contact_id, ahead of the
+  // `channel`-add below. Guarded the same way as the rest of this function
+  // (idempotent -- checks current column state) so this is a no-op against
+  // any DB that either (a) was created fresh from schema.sql, which already
+  // defines `contact_id` directly, or (b) has already been migrated once.
+  // Per the ERD, this is deliberately a fail-loudly RENAME COLUMN (SQLite
+  // >=3.25, bundled by better-sqlite3), not a swallow-and-recreate --
+  // matches this project's existing "fail loudly on unexpected schema
+  // state" posture. SQLite's RENAME COLUMN also rewrites any CHECK
+  // constraint / index / trigger definitions on this table that referenced
+  // the old name, so schema.sql's own CHECK (length(contact_id) > 0) stays
+  // consistent even though the CREATE TABLE statement itself was a no-op
+  // here.
+  if (existingColumns.has('phone_number') && !existingColumns.has('contact_id')) {
+    db.exec('ALTER TABLE leads RENAME COLUMN phone_number TO contact_id');
+    existingColumns.delete('phone_number');
+    existingColumns.add('contact_id');
+  }
+
   const newColumns = [
     ['matched_product_score', 'REAL'],
     ['additional_notes', 'TEXT'],
     // docs/sdd/changes/2026-09-02-numbered-product-selection.md, HIGH-severity
     // post-review fix -- see schema.sql's doc comment on this column.
     ['shown_product_ids', 'TEXT'],
+    // TICKET-1302 (new): DEFAULT 'whatsapp' backfills every pre-existing
+    // row -- every lead captured before this feature existed came in over
+    // WhatsApp (erd.md), so this default is a fact about the data, not a
+    // guess. On a fresh DB, schema.sql's own CREATE TABLE already added
+    // this column, so this is a no-op there.
+    ['channel', "TEXT NOT NULL DEFAULT 'whatsapp'"],
   ];
   for (const [name, type] of newColumns) {
     if (!existingColumns.has(name)) {
       db.exec(`ALTER TABLE leads ADD COLUMN ${name} ${type}`);
     }
   }
+
+  // TICKET-1302: (re-)create the identity-column index under its new name,
+  // now that `contact_id` is guaranteed to exist -- see schema.sql's doc
+  // comment above CREATE INDEX idx_leads_first_message_at for why this
+  // can't live in the static schema.sql exec instead.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_leads_contact_id ON leads(contact_id)');
 }
 
 module.exports = { createDb };

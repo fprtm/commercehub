@@ -8,12 +8,19 @@ const VALID_STATUSES = ['new', 'responded', 'closed'];
  * throwaway test DB.
  */
 function createLeadsRepo(db) {
-  const findByPhone = db.prepare('SELECT * FROM leads WHERE phone_number = ? ORDER BY id DESC LIMIT 1');
+  // TICKET-1302 (docs/sdd/specs/002-telegram-multichannel/erd.md, FR-1306):
+  // scoped by BOTH contact_id AND channel together, not contact_id alone --
+  // a bare contact_id lookup could otherwise collide between a WhatsApp
+  // phone number and a Telegram chat_id occupying the same numeric-string
+  // space, silently merging two unrelated contacts' state.
+  const findByContact = db.prepare(
+    'SELECT * FROM leads WHERE contact_id = ? AND channel = ? ORDER BY id DESC LIMIT 1',
+  );
   const findById = db.prepare('SELECT * FROM leads WHERE id = ?');
   const listAll = db.prepare('SELECT * FROM leads ORDER BY datetime(first_message_at) DESC, id DESC');
   const insert = db.prepare(`
-    INSERT INTO leads (phone_number, first_message_at, question1_answer, question2_answer, status, fallback_triggered, retry_count, created_at, updated_at)
-    VALUES (@phone_number, @first_message_at, @question1_answer, @question2_answer, @status, @fallback_triggered, @retry_count, @created_at, @created_at)
+    INSERT INTO leads (contact_id, channel, first_message_at, question1_answer, question2_answer, status, fallback_triggered, retry_count, created_at, updated_at)
+    VALUES (@contact_id, @channel, @first_message_at, @question1_answer, @question2_answer, @status, @fallback_triggered, @retry_count, @created_at, @created_at)
   `);
   const updateAnswers = db.prepare(`
     UPDATE leads
@@ -109,17 +116,26 @@ function createLeadsRepo(db) {
 
   return {
     /**
-     * Returns the most recent lead for a phone number, or undefined if this
-     * phone number has never messaged before.
+     * Returns the most recent lead for a (contact_id, channel) pair, or
+     * undefined if this contact has never messaged on this channel before.
      *
-     * Judgment call: one phone number can only have one "active" inquiry
-     * thread at a time in this implementation -- a second, unrelated
-     * inquiry from a returning customer after their first lead is fully
-     * resolved (closed) is out of scope for this small demo's state
-     * machine (see stateMachine.js header comment for detail).
+     * TICKET-1302/FR-1306: `channel` is a required second parameter, not an
+     * optional filter -- a bare contact_id lookup could otherwise collide
+     * between a WhatsApp phone number and a Telegram chat_id occupying the
+     * same numeric-string space (see erd.md's Data access pattern changes
+     * section). The caller (inboundMessageProcessor.js) always knows which
+     * channel it's running as, per the SDS's one-processor-instance-per-
+     * channel design, so there's never an ambiguous case to default away.
+     *
+     * Judgment call (pre-existing, unchanged by this ticket): one contact
+     * can only have one "active" inquiry thread at a time in this
+     * implementation -- a second, unrelated inquiry from a returning
+     * customer after their first lead is fully resolved (closed) is out of
+     * scope for this small demo's state machine (see stateMachine.js header
+     * comment for detail).
      */
-    findByPhone(phoneNumber) {
-      return toDomain(findByPhone.get(phoneNumber));
+    findByContact(contactId, channel) {
+      return toDomain(findByContact.get(contactId, channel));
     },
 
     findById(id) {
@@ -130,10 +146,11 @@ function createLeadsRepo(db) {
       return listAll.all().map(toDomain);
     },
 
-    create({ phoneNumber, firstMessageAt }) {
+    create({ contactId, channel, firstMessageAt }) {
       const now = new Date().toISOString();
       const info = insert.run({
-        phone_number: phoneNumber,
+        contact_id: contactId,
+        channel,
         first_message_at: firstMessageAt,
         question1_answer: null,
         question2_answer: null,

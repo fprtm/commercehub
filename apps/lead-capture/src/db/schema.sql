@@ -3,7 +3,25 @@
 
 CREATE TABLE IF NOT EXISTS leads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  phone_number TEXT NOT NULL CHECK (length(phone_number) > 0),
+  -- TICKET-1302 (docs/sdd/specs/002-telegram-multichannel/erd.md): renamed
+  -- from `phone_number` -- generalizes the Lead identity column ahead of
+  -- Telegram support (TICKET-1303), which reuses this same `leads` table
+  -- (Decision 001 §1: channel is an attribute, not a new entity). Holds a
+  -- WhatsApp phone number OR a Telegram `chat_id`, depending on `channel`
+  -- below. Existing DBs created before this column existed are migrated by
+  -- `ensureLeadsColumns()` in src/db/index.js (`ALTER TABLE ... RENAME
+  -- COLUMN`), not by this CREATE TABLE (a no-op against any table that
+  -- already exists).
+  contact_id TEXT NOT NULL CHECK (length(contact_id) > 0),
+  -- TICKET-1302 (new). Values: 'whatsapp' | 'telegram'. Deliberately the
+  -- coarser channel-*family* value, not the finer-grained mode
+  -- ('whatsapp_cloud_api' / 'whatsapp_baileys') inboundMessageProcessor.js
+  -- already threads through for logging -- see that file's
+  -- normalizeDbChannel() for the mapping. DEFAULT 'whatsapp' backfills
+  -- every pre-existing row automatically: every lead captured before this
+  -- feature existed came in over WhatsApp, so the default is a fact about
+  -- the data, not a guess (erd.md).
+  channel TEXT NOT NULL DEFAULT 'whatsapp',
   first_message_at TEXT NOT NULL,
   question1_answer TEXT,
   question2_answer TEXT,
@@ -77,7 +95,17 @@ CREATE TABLE IF NOT EXISTS leads (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_leads_phone_number ON leads(phone_number);
+-- TICKET-1302: the old `idx_leads_phone_number` index (on the
+-- since-renamed `contact_id` column) is intentionally NOT declared here.
+-- On a fresh DB this CREATE TABLE already defines `contact_id` directly, so
+-- an index on it here would be harmless -- but on an EXISTING DB that still
+-- has the old `phone_number` column at the moment this schema.sql is exec'd
+-- (CREATE TABLE IF NOT EXISTS is a no-op against it), an index statement
+-- referencing `contact_id` here would fail loudly ("no such column") before
+-- src/db/index.js's ensureLeadsColumns() ever gets a chance to run the
+-- rename. So this index is created programmatically in ensureLeadsColumns(),
+-- after the rename is guaranteed to have already happened -- see that
+-- function for the `idx_leads_contact_id` index.
 CREATE INDEX IF NOT EXISTS idx_leads_first_message_at ON leads(first_message_at);
 
 -- Added for docs/sdd/changes/2026-09-01-auto-reply-toggle.md (FR-401..FR-403).

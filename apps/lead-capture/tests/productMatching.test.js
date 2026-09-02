@@ -33,15 +33,15 @@ test('FR-503: a high-confidence Q1 match proceeds through Q2 completely unchange
   });
 
   const phone = '628500000001';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
 
   assert.equal(result.decision.action, 'ANSWER_Q1');
   assert.equal(result.decision.replies.length, 1, 'Q2 must still be sent (FR-503: unchanged flow)');
   assert.equal(result.decision.replies[0], TEST_CONFIG.questions[1].text);
   assert.match(sent.at(-1), /size \/ how should we contact you/i);
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.question1_answer, 'Kaos Rimba Navy');
   assert.equal(lead.matched_product, 'Kaos Rimba Navy');
   assert.equal(lead.needs_review, 0);
@@ -62,9 +62,9 @@ test('FR-504: a low-confidence/unrelated Q1 answer suppresses the Q2 prompt and 
   });
 
   const phone = '628500000002';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   const sentCountAfterFirstContact = sent.length;
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'toko buka jam berapa?', messageType: 'text' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'toko buka jam berapa?', messageType: 'text' });
 
   // FR-504: no Q2 prompt sent for this turn.
   assert.equal(result.decision.action, 'ANSWER_Q1', 'the state machine still treats this as a structurally-usable Q1 answer');
@@ -72,7 +72,7 @@ test('FR-504: a low-confidence/unrelated Q1 answer suppresses the Q2 prompt and 
   assert.equal(sent.length, sentCountAfterFirstContact, 'no new outbound message was sent for this turn');
 
   // Raw text still visible on the Lead for the owner (FR-504), and flagged.
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.question1_answer, 'toko buka jam berapa?', 'raw text must still be stored for manual review');
   assert.equal(lead.needs_review, 1);
   assert.equal(lead.matched_product, null);
@@ -96,13 +96,13 @@ test('NFR-502: an explicitly empty product catalog always resolves to needs_revi
   });
 
   const phone = '628500000003';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   await assert.doesNotReject(async () => {
-    const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
+    const result = await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
     assert.equal(result.decision.replies.length, 0);
   });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.needs_review, 1);
   assert.equal(lead.matched_product, null);
 
@@ -121,11 +121,11 @@ test('NFR-502: omitting `products` entirely (every pre-existing caller) leaves f
   });
 
   const phone = '628500000004';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'toko buka jam berapa?', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'toko buka jam berapa?', messageType: 'text' });
 
   assert.equal(result.decision.replies.length, 1, 'Q2 must still be sent -- matching never activated');
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.needs_review, 0);
   assert.equal(lead.matched_product, null);
 
@@ -146,8 +146,8 @@ test('read receipt still fires for a suppressed-Q2 turn -- only the scripted rep
   });
 
   const phone = '628500000005';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text', messageId: 'm1' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'toko buka jam berapa?', messageType: 'text', messageId: 'm2' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text', messageId: 'm1' });
+  await processInboundMessage({ contactId: phone, messageBody: 'toko buka jam berapa?', messageType: 'text', messageId: 'm2' });
 
   assert.equal(readReceipts.length, 2, 'markAsRead fires unconditionally, regardless of whether the scripted reply was suppressed');
   assert.deepEqual(readReceipts[1], { to: phone, messageId: 'm2' });
@@ -177,10 +177,10 @@ test('ADVERSARIAL end-to-end (Critical fix): a refund complaint about the produc
   });
 
   const phone = '628500000006';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   const sentCountAfterFirstContact = sent.length;
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'kaos kemarin yang saya beli robek, bisa refund?',
     messageType: 'text',
   });
@@ -188,7 +188,7 @@ test('ADVERSARIAL end-to-end (Critical fix): a refund complaint about the produc
   assert.equal(result.decision.replies.length, 0, 'the "what size?" Q2 prompt must be suppressed for a complaint, not sent');
   assert.equal(sent.length, sentCountAfterFirstContact, 'no tone-deaf auto-reply was sent');
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.question1_answer, 'kaos kemarin yang saya beli robek, bisa refund?', 'raw complaint text preserved for the owner');
   assert.equal(lead.needs_review, 1, 'this must NOT look like a normal successful match on the dashboard');
   assert.equal(lead.matched_product, null);
@@ -208,15 +208,15 @@ test('ADVERSARIAL end-to-end (Critical fix): naming the full product then compla
   });
 
   const phone = '628500000007';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'kaos rimba navy saya rusak parah, refund dong',
     messageType: 'text',
   });
 
   assert.equal(result.decision.replies.length, 0);
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.needs_review, 1);
   assert.equal(lead.matched_product, null);
 
@@ -239,11 +239,11 @@ test('AMBIGUITY end-to-end (Medium fix): two products sharing a generic alias re
   });
 
   const phone = '628500000008';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'kaos dong', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'kaos dong', messageType: 'text' });
 
   assert.equal(result.decision.replies.length, 0);
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.needs_review, 1);
   assert.equal(lead.matched_product, null);
 
@@ -356,15 +356,15 @@ test('RETUNED end-to-end: a realistic longer purchase question (with filler word
   });
 
   const phone = '628500000009';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'min, kaos rimba navy nya ada warna lain gak selain navy',
     messageType: 'text',
   });
 
   assert.equal(result.decision.replies.length, 1, 'Q2 must be sent -- this is an ordinary purchase question, not a complaint');
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, 'Kaos Rimba Navy');
   assert.equal(lead.needs_review, 0);
 

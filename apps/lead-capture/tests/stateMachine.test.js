@@ -18,7 +18,8 @@ const CONFIG = {
 function baseLead(overrides = {}) {
   return {
     id: 1,
-    phone_number: '6281234567890',
+    contact_id: '6281234567890',
+    channel: 'whatsapp',
     first_message_at: '2026-09-01T00:00:00.000Z',
     question1_answer: null,
     question2_answer: null,

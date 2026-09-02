@@ -38,15 +38,15 @@ test('FR-801/FR-802/FR-803: the real bug scenario -- a 3rd message naming a real
   const phone = '628700000001';
 
   // Message 1: starts the flow (ack + Q1).
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text', timestamp: '2026-09-02T07:10:00.000Z' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text', timestamp: '2026-09-02T07:10:00.000Z' });
   // Message 2: answers Q1 with something vague/unrelated -- no confident
   // product match (mirrors the real scenario: two earlier low-content
   // messages filled Q1/Q2 before the actual product mention arrived).
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'boleh tanya-tanya dulu', messageType: 'text', timestamp: '2026-09-02T07:11:00.000Z' });
+  await processInboundMessage({ contactId: phone, messageBody: 'boleh tanya-tanya dulu', messageType: 'text', timestamp: '2026-09-02T07:11:00.000Z' });
   // Message 3: answers Q2, completing the flow.
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'oke makasih infonya', messageType: 'text', timestamp: '2026-09-02T07:12:00.000Z' });
+  await processInboundMessage({ contactId: phone, messageBody: 'oke makasih infonya', messageType: 'text', timestamp: '2026-09-02T07:12:00.000Z' });
 
-  const before = leadsRepo.findByPhone(phone);
+  const before = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(before.question1_answer, 'boleh tanya-tanya dulu');
   assert.equal(before.question2_answer, 'oke makasih infonya');
   assert.equal(before.matched_product, null, 'sanity: no confident match yet -- Q1 was too vague');
@@ -57,7 +57,7 @@ test('FR-801/FR-802/FR-803: the real bug scenario -- a 3rd message naming a real
   // Message 4 (the real bug's message 3/4): arrives AFTER the flow is
   // complete, and names the actual product.
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'spill harga kaos rimba nya dong',
     messageType: 'text',
     timestamp: '2026-09-02T07:14:00.000Z',
@@ -68,7 +68,7 @@ test('FR-801/FR-802/FR-803: the real bug scenario -- a 3rd message naming a real
   assert.deepEqual(result.decision.replies, [], 'NFR-802: no automated reply for a post-completion message');
   assert.equal(sent.length, sentCountBeforeThirdMessage, 'NFR-802: nothing new was actually sent, either');
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
 
   // FR-801: message is visible somewhere on the Lead record now, with an
   // exact timestamped line -- never silently lost.
@@ -103,17 +103,17 @@ test('FR-803: needs_review flips true from a post-completion message even when Q
   });
 
   const phone = '628700000002';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text' });
 
-  const before = leadsRepo.findByPhone(phone);
+  const before = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(before.matched_product, 'Kaos Rimba Navy');
   assert.equal(before.needs_review, 0, 'sanity: FR-503 -- a confident Q1 match does NOT flag needs_review');
 
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'terima kasih ya', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'terima kasih ya', messageType: 'text' });
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(after.needs_review, 1, 'FR-803: any post-completion message flips needs_review true, even on an already-confident lead');
 
   db.close();
@@ -131,12 +131,12 @@ test('FR-802: a later, lower-confidence (but still-matched) post-completion mess
   });
 
   const phone = '628700000003';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   // Exact product name -> score 1.0, stored as the confident match.
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'jaket outdoor', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size XL, WhatsApp aja', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'jaket outdoor', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Size XL, WhatsApp aja', messageType: 'text' });
 
-  const before = leadsRepo.findByPhone(phone);
+  const before = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(before.matched_product, 'Jaket Outdoor Waterproof');
   assert.equal(before.matched_product_score, 1);
 
@@ -144,13 +144,13 @@ test('FR-802: a later, lower-confidence (but still-matched) post-completion mess
   // match threshold (matched: true) but scores strictly lower than 1.0 --
   // this must NOT overwrite the existing (better) match.
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'jakett outdor nya ada gak min warnanya apa aja ya',
     messageType: 'text',
   });
   assert.equal(result.decision.action, 'NO_OP');
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(after.matched_product, 'Jaket Outdoor Waterproof', 'unchanged -- a lower-scoring later match must not win');
   assert.equal(after.matched_product_score, 1, 'unchanged -- the original higher score is preserved');
   // The message itself is still captured (FR-801) even though it didn't win the match.
@@ -171,13 +171,13 @@ test('FR-802: an equal-confidence post-completion match for a DIFFERENT product 
   });
 
   const phone = '628700000004';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' }); // score 1.0
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' }); // score 1.0
+  await processInboundMessage({ contactId: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text' });
 
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'jaket outdoor', messageType: 'text' }); // also scores 1.0, different product
+  await processInboundMessage({ contactId: phone, messageBody: 'jaket outdoor', messageType: 'text' }); // also scores 1.0, different product
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(after.matched_product, 'Kaos Rimba Navy', 'the first confident match wins ties -- "higher", not "as high"');
   assert.equal(after.matched_product_score, 1);
 
@@ -196,13 +196,13 @@ test('FR-802: a post-completion message that names an unmatched/no product still
   });
 
   const phone = '628700000005';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text' });
 
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'toko buka jam berapa ya', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'toko buka jam berapa ya', messageType: 'text' });
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(after.matched_product, 'Kaos Rimba Navy', 'unrelated later message must not clear an existing good match');
   assert.match(after.additional_notes, /toko buka jam berapa ya$/, 'still captured, just did not win the match');
   assert.equal(after.needs_review, 1);
@@ -221,14 +221,14 @@ test('FR-801: multiple post-completion messages append as a running log, never o
   });
 
   const phone = '628700000006';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'L', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'L', messageType: 'text' });
 
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'satu lagi nih', messageType: 'text', timestamp: '2026-09-02T08:00:00.000Z' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'jadi beli dua ya', messageType: 'text', timestamp: '2026-09-02T08:05:00.000Z' });
+  await processInboundMessage({ contactId: phone, messageBody: 'satu lagi nih', messageType: 'text', timestamp: '2026-09-02T08:00:00.000Z' });
+  await processInboundMessage({ contactId: phone, messageBody: 'jadi beli dua ya', messageType: 'text', timestamp: '2026-09-02T08:05:00.000Z' });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(
     lead.additional_notes,
     '[2026-09-02T08:00:00Z] satu lagi nih\n[2026-09-02T08:05:00Z] jadi beli dua ya',
@@ -250,17 +250,17 @@ test('FR-801/FR-803 (judgment call): also applies to the fallback_already_trigge
   });
 
   const phone = '628700000007';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   // Two unusable (non-text) messages in a row: RETRY, then FALLBACK.
-  await processInboundMessage({ phoneNumber: phone, messageBody: null, messageType: 'sticker' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: null, messageType: 'sticker' });
+  await processInboundMessage({ contactId: phone, messageBody: null, messageType: 'sticker' });
+  await processInboundMessage({ contactId: phone, messageBody: null, messageType: 'sticker' });
 
-  const afterFallback = leadsRepo.findByPhone(phone);
+  const afterFallback = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(afterFallback.fallback_triggered, 1, 'sanity: fallback has genuinely fired');
   const sentCountAfterFallback = sent.length;
 
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'eh masih ada orangnya gak',
     messageType: 'text',
     timestamp: '2026-09-02T09:00:00.000Z',
@@ -271,7 +271,7 @@ test('FR-801/FR-803 (judgment call): also applies to the fallback_already_trigge
   assert.deepEqual(result.decision.replies, [], 'NFR-802: still no automated reply');
   assert.equal(sent.length, sentCountAfterFallback, 'NFR-802: nothing new actually sent');
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(after.additional_notes, '[2026-09-02T09:00:00Z] eh masih ada orangnya gak');
   assert.equal(after.needs_review, 1);
 
@@ -290,8 +290,8 @@ test('FR-801/FR-803 (judgment call, post-review scoped): the lead_status_respond
   });
 
   const phone = '628700000008';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  const lead = leadsRepo.findByPhone(phone);
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.needs_review, 0, 'sanity: not flagged before any of this');
   // Owner action from the dashboard, bypassing the automated flow entirely.
   leadsRepo.updateStatus(lead.id, 'responded');
@@ -299,7 +299,7 @@ test('FR-801/FR-803 (judgment call, post-review scoped): the lead_status_respond
   const sentCountAfterClose = sent.length;
 
   const result = await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'masih buka gak nih',
     messageType: 'text',
     timestamp: '2026-09-02T10:00:00.000Z',
@@ -310,7 +310,7 @@ test('FR-801/FR-803 (judgment call, post-review scoped): the lead_status_respond
   assert.deepEqual(result.decision.replies, [], 'NFR-802: closed leads still get no automated reply');
   assert.equal(sent.length, sentCountAfterClose);
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   // FR-801 still holds: the message is captured, never silently dropped.
   assert.equal(after.additional_notes, '[2026-09-02T10:00:00Z] masih buka gak nih');
   // Post-review fix: needs_review is NOT force-flagged for a terminal
@@ -334,24 +334,24 @@ test('FR-803 scoping (post-review fix): needs_review is PRESERVED, not force-cle
   });
 
   const phone = '628700000011';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   // Vague Q1 answer -> FR-504 already flags needs_review=1 before the lead is ever closed.
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'boleh tanya-tanya dulu', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'oke', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'boleh tanya-tanya dulu', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'oke', messageType: 'text' });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.needs_review, 1, 'sanity: already flagged, from the unmatched Q1 answer');
   leadsRepo.updateStatus(lead.id, 'responded');
   leadsRepo.updateStatus(lead.id, 'closed');
 
   await processInboundMessage({
-    phoneNumber: phone,
+    contactId: phone,
     messageBody: 'jaket outdoor',
     messageType: 'text',
     timestamp: '2026-09-02T11:00:00.000Z',
   });
 
-  const after = leadsRepo.findByPhone(phone);
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(after.needs_review, 1, 'left exactly as it was -- not force-cleared just because this is a terminal-status NO_OP');
   assert.equal(after.matched_product, 'Jaket Outdoor Waterproof', 'FR-802 matching still applies for terminal-status leads');
   assert.match(after.additional_notes, /jaket outdoor$/);
@@ -371,7 +371,7 @@ test('FR-803 scoping (post-review fix): the dashboard never shows a closed lead 
     const cookie = loginRes.headers.get('set-cookie').split(';')[0];
 
     const leadsRepo = createLeadsRepo(ctx.db);
-    const lead = leadsRepo.create({ phoneNumber: '628700000012', firstMessageAt: '2026-09-02T00:00:00.000Z' });
+    const lead = leadsRepo.create({ contactId: '628700000012', channel: 'whatsapp', firstMessageAt: '2026-09-02T00:00:00.000Z' });
     leadsRepo.saveAnswers(lead.id, { question1Answer: 'Kaos', question2Answer: 'L', fallbackTriggered: false });
     leadsRepo.updateStatus(lead.id, 'responded');
     leadsRepo.updateStatus(lead.id, 'closed');
@@ -405,13 +405,13 @@ test('FR-801: a non-text post-completion message (e.g. a sticker) is left as a t
   });
 
   const phone = '628700000009';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos', messageType: 'text' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'L', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'L', messageType: 'text' });
 
-  const before = leadsRepo.findByPhone(phone);
-  await processInboundMessage({ phoneNumber: phone, messageBody: null, messageType: 'sticker' });
-  const after = leadsRepo.findByPhone(phone);
+  const before = leadsRepo.findByContact(phone, 'whatsapp');
+  await processInboundMessage({ contactId: phone, messageBody: null, messageType: 'sticker' });
+  const after = leadsRepo.findByContact(phone, 'whatsapp');
 
   assert.equal(after.additional_notes, null);
   assert.equal(after.needs_review, before.needs_review, 'a contentless message does not flip needs_review either');
@@ -431,7 +431,7 @@ test('FR-801: the dashboard (GET /leads) displays additional_notes when present,
     const cookie = loginRes.headers.get('set-cookie').split(';')[0];
 
     const leadsRepo = createLeadsRepo(ctx.db);
-    const lead = leadsRepo.create({ phoneNumber: '628700000010', firstMessageAt: '2026-09-02T00:00:00.000Z' });
+    const lead = leadsRepo.create({ contactId: '628700000010', channel: 'whatsapp', firstMessageAt: '2026-09-02T00:00:00.000Z' });
     leadsRepo.saveAnswers(lead.id, { question1Answer: 'Kaos', question2Answer: 'L', fallbackTriggered: false });
     leadsRepo.appendAdditionalNote(lead.id, '[2026-09-02T07:14:00Z] spill harga kaos rimba nya dong');
 

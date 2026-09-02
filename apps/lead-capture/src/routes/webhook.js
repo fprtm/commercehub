@@ -120,7 +120,7 @@ function createWebhookRouter(deps) {
 
   async function processMessage(message) {
     return processInboundMessage({
-      phoneNumber: message.from,
+      contactId: message.from,
       messageBody: message.text,
       messageType: message.type,
       timestamp: toIsoTimestamp(message.timestamp),

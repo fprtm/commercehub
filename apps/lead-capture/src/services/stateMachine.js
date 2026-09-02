@@ -253,8 +253,8 @@ function parseNumberSelection(rawText) {
 /**
  * @param {object} params
  * @param {object|null|undefined} params.existingLead - the most recent Lead
- *   row for this phone number (as returned by leadsRepo.findByPhone), or
- *   null/undefined if this phone number has never messaged before.
+ *   row for this contact (as returned by leadsRepo.findByContact), or
+ *   null/undefined if this contact has never messaged before.
  * @param {string|null} params.messageText - the inbound message's text
  *   body, already extracted from the raw Meta payload; null/empty for
  *   non-text message types.

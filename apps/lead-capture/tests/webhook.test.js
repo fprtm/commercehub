@@ -62,7 +62,7 @@ test('T-006 POST /webhook: first-time message creates a Lead and sends ack + Q1 
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { status: 'received' });
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get('6281234567890');
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get('6281234567890');
     assert.ok(lead, 'expected a Lead row to be created');
     assert.equal(lead.status, 'new');
     assert.equal(lead.question1_answer, null);
@@ -134,7 +134,7 @@ test('T-006 POST /webhook: full happy-path conversation (ack -> Q1 -> Q2 -> comp
       body: JSON.stringify(messagePayload(phone, 'Size L, WhatsApp aja')),
     });
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.equal(lead.question1_answer, 'Kaos Rimba Hitam');
     assert.equal(lead.question2_answer, 'Size L, WhatsApp aja');
     assert.equal(lead.fallback_triggered, 0);
@@ -178,7 +178,7 @@ test('T-005/FR-002 POST /webhook: first unrecognizable message (non-text type) r
     });
     assert.equal(res.status, 200);
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.equal(lead.fallback_triggered, 0, 'FR-002: one retry is allowed before fallback fires');
     assert.equal(lead.retry_count, 1);
     assert.equal(lead.status, 'new');
@@ -214,7 +214,7 @@ test('T-006/FR-007 POST /webhook: a second unrecognizable message in a row trigg
     });
     assert.equal(res.status, 200);
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.equal(lead.fallback_triggered, 1);
     assert.equal(lead.status, 'new', 'FR-007: lead status stays new on fallback');
     assert.equal(lead.question1_answer, null);
@@ -248,7 +248,7 @@ test('T-005/FR-002 POST /webhook: a usable answer after one retry still succeeds
       body: JSON.stringify(messagePayload(phone, 'Kaos Rimba Hitam', '1735689602')),
     });
 
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get(phone);
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get(phone);
     assert.equal(lead.fallback_triggered, 0);
     assert.equal(lead.question1_answer, 'Kaos Rimba Hitam');
     assert.equal(lead.retry_count, 0, 'retry count resets once Q1 is answered and Q2 becomes pending');
@@ -311,7 +311,7 @@ test('T-006/NFR-002/T-011 POST /webhook: a Meta API send failure is logged as ex
 
     // TD-004/NFR-002: the Lead record itself is not lost even though the
     // outbound reply failed -- only the reply-send step failed.
-    const lead = ctx.db.prepare('SELECT * FROM leads WHERE phone_number = ?').get('6283333333333');
+    const lead = ctx.db.prepare('SELECT * FROM leads WHERE contact_id = ?').get('6283333333333');
     assert.ok(lead, 'lead should still exist even though the Meta send failed');
   } finally {
     await ctx.close();

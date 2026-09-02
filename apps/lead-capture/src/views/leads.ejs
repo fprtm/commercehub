@@ -86,7 +86,7 @@
         <tbody>
           <% leads.forEach(function(lead) { %>
             <tr>
-              <td><%= lead.phone_number %></td>
+              <td><%= lead.contact_id %></td>
               <td><%= new Date(lead.first_message_at).toLocaleString() %></td>
               <td class="answer <%= lead.question1_answer ? '' : 'empty' %>">
                 <%= lead.question1_answer || 'No answer yet' %>

@@ -33,9 +33,9 @@ test('T-009 GET /leads lists leads most-recent-first with phone, answers and sta
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const older = repo.create({ phoneNumber: '6281000000001', firstMessageAt: '2026-08-01T00:00:00.000Z' });
+    const older = repo.create({ contactId: '6281000000001', channel: 'whatsapp', firstMessageAt: '2026-08-01T00:00:00.000Z' });
     repo.saveAnswers(older.id, { question1Answer: 'Kaos', question2Answer: 'L', fallbackTriggered: false });
-    repo.create({ phoneNumber: '6281000000002', firstMessageAt: '2026-08-15T00:00:00.000Z' });
+    repo.create({ contactId: '6281000000002', channel: 'whatsapp', firstMessageAt: '2026-08-15T00:00:00.000Z' });
 
     const cookie = await loginAndGetCookie(ctx);
     const res = await fetch(`${ctx.baseUrl}/leads`, { headers: { Cookie: cookie } });
@@ -52,11 +52,40 @@ test('T-009 GET /leads lists leads most-recent-first with phone, answers and sta
   }
 });
 
+test('TEST-1302a (FR-1306): same contact_id under two different channels resolves to two independent leads', async () => {
+  const ctx = await startTestServer();
+  try {
+    const repo = createLeadsRepo(ctx.db);
+    const sharedContactId = '12345';
+
+    const waLead = repo.create({ contactId: sharedContactId, channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const tgLead = repo.create({ contactId: sharedContactId, channel: 'telegram', firstMessageAt: '2026-09-01T00:01:00.000Z' });
+
+    assert.notEqual(waLead.id, tgLead.id, 'each channel gets its own Lead row even with an identical contact_id');
+
+    const foundWa = repo.findByContact(sharedContactId, 'whatsapp');
+    const foundTg = repo.findByContact(sharedContactId, 'telegram');
+
+    assert.equal(foundWa.id, waLead.id);
+    assert.equal(foundTg.id, tgLead.id);
+    assert.notEqual(foundWa.id, foundTg.id, 'findByContact never cross-contaminates state between channels');
+
+    // Mutating one lead (e.g. via saveAnswers) must never be visible through
+    // the other channel's lookup -- proves these are genuinely independent
+    // rows, not a shared identity silently merged by contact_id alone.
+    repo.saveAnswers(waLead.id, { question1Answer: 'Kaos', question2Answer: 'L', fallbackTriggered: false });
+    const tgAfterWaUpdate = repo.findByContact(sharedContactId, 'telegram');
+    assert.equal(tgAfterWaUpdate.question1_answer, null, 'the Telegram lead must be unaffected by the WhatsApp lead update');
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('T-010 POST /leads/:id/status updates status to responded and persists across reload', async () => {
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const lead = repo.create({ phoneNumber: '6281000000003', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const lead = repo.create({ contactId: '6281000000003', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
 
     const cookie = await loginAndGetCookie(ctx);
     const res = await fetch(`${ctx.baseUrl}/leads/${lead.id}/status`, {
@@ -95,7 +124,7 @@ test('T-010 POST /leads/:id/status with an invalid status value returns 400', as
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const lead = repo.create({ phoneNumber: '6281000000004', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const lead = repo.create({ contactId: '6281000000004', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
     const cookie = await loginAndGetCookie(ctx);
 
     const res = await fetch(`${ctx.baseUrl}/leads/${lead.id}/status`, {
@@ -116,7 +145,7 @@ test('T-010 POST /leads/:id/status rejects setting status back to "new" (not a v
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const lead = repo.create({ phoneNumber: '6281000000005', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const lead = repo.create({ contactId: '6281000000005', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
     const cookie = await loginAndGetCookie(ctx);
 
     const res = await fetch(`${ctx.baseUrl}/leads/${lead.id}/status`, {
@@ -134,7 +163,7 @@ test('technical-design lifecycle: POST /leads/:id/status rejects closed->respond
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const lead = repo.create({ phoneNumber: '6281000000007', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const lead = repo.create({ contactId: '6281000000007', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
     repo.updateStatus(lead.id, 'closed');
     const cookie = await loginAndGetCookie(ctx);
 
@@ -156,7 +185,7 @@ test('technical-design lifecycle: a closed lead shows no action buttons on the d
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const lead = repo.create({ phoneNumber: '6281000000008', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const lead = repo.create({ contactId: '6281000000008', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
     repo.updateStatus(lead.id, 'closed');
     const cookie = await loginAndGetCookie(ctx);
 
@@ -174,7 +203,7 @@ test('T-010 POST /leads/:id/status requires authentication', async () => {
   const ctx = await startTestServer();
   try {
     const repo = createLeadsRepo(ctx.db);
-    const lead = repo.create({ phoneNumber: '6281000000006', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const lead = repo.create({ contactId: '6281000000006', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
 
     const res = await fetch(`${ctx.baseUrl}/leads/${lead.id}/status`, {
       method: 'POST',

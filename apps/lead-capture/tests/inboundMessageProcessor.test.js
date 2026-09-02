@@ -38,7 +38,7 @@ test('FR-302: processInboundMessage produces identical Lead outcomes whether cal
 
   // Shape webhook.js actually calls with (see src/routes/webhook.js's processMessage()).
   await processInboundMessage({
-    phoneNumber: '628111111111',
+    contactId: '628111111111',
     messageBody: 'halo, baju ini masih ada?',
     messageType: 'text',
     timestamp: new Date('2026-09-01T00:00:00.000Z').toISOString(),
@@ -49,15 +49,15 @@ test('FR-302: processInboundMessage produces identical Lead outcomes whether cal
   // @rimba/whatsapp-connector's baileysConnector.js's handleMessagesUpsert()) -- same
   // logical first-contact message, different channel/caller.
   await processInboundMessage({
-    phoneNumber: '628222222222',
+    contactId: '628222222222',
     messageBody: 'halo, baju ini masih ada?',
     messageType: 'text',
     timestamp: new Date('2026-09-01T00:00:01.000Z').toISOString(),
     channel: 'whatsapp_baileys',
   });
 
-  const leadA = leadsRepo.findByPhone('628111111111');
-  const leadB = leadsRepo.findByPhone('628222222222');
+  const leadA = leadsRepo.findByContact('628111111111', 'whatsapp');
+  const leadB = leadsRepo.findByContact('628222222222', 'whatsapp');
 
   assert.ok(leadA && leadB, 'both channels must create a Lead row via the same leadsRepo');
   assert.equal(leadA.status, 'new');
@@ -87,11 +87,11 @@ test('FR-302: a full qualifying-question flow behaves identically when driven en
   });
 
   const phone = '628333333333';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text', channel: 'whatsapp_baileys' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Hitam', messageType: 'text', channel: 'whatsapp_baileys' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Hitam', messageType: 'text', channel: 'whatsapp_baileys' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text', channel: 'whatsapp_baileys' });
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.question1_answer, 'Kaos Rimba Hitam');
   assert.equal(lead.question2_answer, 'Size L, WhatsApp aja');
   assert.equal(lead.fallback_triggered, 0);
@@ -125,14 +125,14 @@ test('FR-601 (post-review fix): markAsRead still fires for a new inbound message
   // Complete the flow: start (ack+Q1), answer Q1 (Q2), answer Q2
   // (completionMessage, since TEST_CONFIG defines one) -- 4 sends, 3 read
   // receipts, all messages so far genuinely produced a reply.
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text', messageId: 'm1' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Hitam', messageType: 'text', messageId: 'm2' });
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text', messageId: 'm3' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text', messageId: 'm1' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Hitam', messageType: 'text', messageId: 'm2' });
+  await processInboundMessage({ contactId: phone, messageBody: 'Size L, WhatsApp aja', messageType: 'text', messageId: 'm3' });
   assert.equal(readReceipts.length, 3, 'sanity: one read receipt per inbound message so far, all of which had replies');
   const sentCountBeforeFourthMessage = sent.length;
 
   // A 4th message after the flow is already complete -- NO_OP, zero replies.
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'thanks!', messageType: 'text', messageId: 'm4' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'thanks!', messageType: 'text', messageId: 'm4' });
 
   assert.equal(result.decision.replies.length, 0, 'sanity: this message genuinely produces zero scripted replies');
   assert.equal(sent.length, sentCountBeforeFourthMessage, 'no new outbound reply was sent for the 4th message (unchanged behavior)');

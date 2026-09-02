@@ -57,7 +57,8 @@ const FOUR_PRODUCTS_SHOWN_IDS = FOUR_PRODUCTS.map((p) => p.id);
 function baseLead(overrides = {}) {
   return {
     id: 1,
-    phone_number: '6281234567890',
+    contact_id: '6281234567890',
+    channel: 'whatsapp',
     first_message_at: '2026-09-01T00:00:00.000Z',
     question1_answer: null,
     question2_answer: null,
@@ -329,14 +330,14 @@ test('FR-1002/NFR-1002 end-to-end: replying "2" selects exactly the 2nd active p
   // insertion order -- see productsRepo.js's listActiveStmt -- so position
   // 1 is "Celana Rimba Cargo" and position 2 is "Jaket Rimba Outdoor".
   const phone = '628501000001';
-  const q1Result = await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  const q1Result = await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   assert.match(q1Result.decision.replies[1], /^Ada beberapa pilihan nih kak:\n1\. Celana Rimba Cargo\n2\. Jaket Rimba Outdoor/);
 
-  const answerResult = await processInboundMessage({ phoneNumber: phone, messageBody: '2', messageType: 'text' });
+  const answerResult = await processInboundMessage({ contactId: phone, messageBody: '2', messageType: 'text' });
   assert.equal(answerResult.decision.action, 'ANSWER_Q1');
   assert.equal(answerResult.decision.replies.length, 1, 'Q2 must still be sent');
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, 'Jaket Rimba Outdoor');
   // NFR-1002: exactly 1.0, never a scored value. The real guarantee that
   // the fuzzy matcher never ran for this turn isn't a property of the
@@ -363,9 +364,9 @@ test('FR-1002 end-to-end: tolerant variants "no 2", "2.", "2 dong" all resolve t
   for (const variant of ['2', 'no 2', '2.', '2 dong']) {
     phoneCounter += 1;
     const phone = `62850200000${phoneCounter}`;
-    await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-    await processInboundMessage({ phoneNumber: phone, messageBody: variant, messageType: 'text' });
-    const lead = leadsRepo.findByPhone(phone);
+    await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+    await processInboundMessage({ contactId: phone, messageBody: variant, messageType: 'text' });
+    const lead = leadsRepo.findByContact(phone, 'whatsapp');
     // Position 2 (alphabetical listActive() order) is "Jaket Rimba Outdoor" -- see the comment above.
     assert.equal(lead.matched_product, 'Jaket Rimba Outdoor', `variant "${variant}"`);
     assert.equal(lead.matched_product_score, 1.0, `variant "${variant}"`);
@@ -384,16 +385,16 @@ test('FR-1004 end-to-end: an out-of-range number retries once then falls back, r
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo, sent });
 
   const phone = '628503000001';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
-  const firstBad = await processInboundMessage({ phoneNumber: phone, messageBody: '5', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
+  const firstBad = await processInboundMessage({ contactId: phone, messageBody: '5', messageType: 'text' });
   assert.equal(firstBad.decision.action, 'RETRY');
-  let lead = leadsRepo.findByPhone(phone);
+  let lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.retry_count, 1);
   assert.equal(lead.fallback_triggered, 0);
 
-  const secondBad = await processInboundMessage({ phoneNumber: phone, messageBody: '99', messageType: 'text' });
+  const secondBad = await processInboundMessage({ contactId: phone, messageBody: '99', messageType: 'text' });
   assert.equal(secondBad.decision.action, 'FALLBACK');
-  lead = leadsRepo.findByPhone(phone);
+  lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.fallback_triggered, 1);
   assert.equal(lead.matched_product, null);
 
@@ -409,15 +410,15 @@ test('FR-1003 end-to-end: a non-numeric Q1 reply still falls through to the exis
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo, sent });
 
   const phone = '628504000001';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   // Same clean-product-name scenario tests/productMatching.test.js already
   // covers for FR-503 -- proving the fuzzy fallback layer still behaves
   // identically when entered through this new numbered-list-aware path.
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'Kaos Rimba Navy', messageType: 'text' });
   assert.equal(result.decision.action, 'ANSWER_Q1');
   assert.equal(result.decision.replies.length, 1, 'Q2 still sent on a confident fuzzy match');
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, 'Kaos Rimba Navy');
   assert.equal(lead.needs_review, 0);
 
@@ -432,15 +433,15 @@ test('FR-1005 end-to-end: zero active products falls back to the original free-t
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo, sent });
 
   const phone = '628505000001';
-  const result = await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  const result = await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   assert.equal(result.decision.replies[1], CONFIG.questions[0].text);
 
   // FR-1005: with nothing to number against, a numeric-looking reply is
   // just an ordinary (unmatched, since the catalog is empty) free-text Q1
   // answer -- not treated as a numbered selection, and not a crash.
-  const answer = await processInboundMessage({ phoneNumber: phone, messageBody: '2', messageType: 'text' });
+  const answer = await processInboundMessage({ contactId: phone, messageBody: '2', messageType: 'text' });
   assert.equal(answer.decision.action, 'ANSWER_Q1');
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.question1_answer, '2');
   assert.equal(lead.matched_product, null);
   assert.equal(lead.needs_review, 1, 'NFR-502: empty catalog always resolves to needs_review, never a crash');
@@ -459,7 +460,7 @@ test('NFR-1003 end-to-end (catalog freshness): deactivating a product between tw
   // Customer A sees all 4 products (alphabetical listActive() order),
   // including Kaos Rimba Navy at position 4.
   const phoneA = '628506000001';
-  const resultA = await processInboundMessage({ phoneNumber: phoneA, messageBody: 'halo', messageType: 'text' });
+  const resultA = await processInboundMessage({ contactId: phoneA, messageBody: 'halo', messageType: 'text' });
   assert.match(resultA.decision.replies[1], /4\. Kaos Rimba Navy/);
   assert.equal(resultA.decision.replies[1].split('\n').filter((line) => /^\d+\./.test(line)).length, 4);
 
@@ -471,16 +472,16 @@ test('NFR-1003 end-to-end (catalog freshness): deactivating a product between tw
   // Customer B's numbered list must reflect the new, smaller active catalog --
   // 3 products, Navy no longer among them, positions renumbered.
   const phoneB = '628506000002';
-  const resultB = await processInboundMessage({ phoneNumber: phoneB, messageBody: 'halo', messageType: 'text' });
+  const resultB = await processInboundMessage({ contactId: phoneB, messageBody: 'halo', messageType: 'text' });
   const q1LinesB = resultB.decision.replies[1].split('\n').filter((line) => /^\d+\./.test(line));
   assert.equal(q1LinesB.length, 3);
   assert.ok(!q1LinesB.some((line) => line.includes('Kaos Rimba Navy')), 'deactivated product must not appear in the list at all');
   assert.deepEqual(q1LinesB, ['1. Celana Rimba Cargo', '2. Jaket Rimba Outdoor', '3. Kaos Rimba Hitam']);
 
   // And a numbered reply for customer B resolves against THIS (post-deactivation) list.
-  const answerB = await processInboundMessage({ phoneNumber: phoneB, messageBody: '1', messageType: 'text' });
+  const answerB = await processInboundMessage({ contactId: phoneB, messageBody: '1', messageType: 'text' });
   assert.equal(answerB.decision.action, 'ANSWER_Q1');
-  const leadB = leadsRepo.findByPhone(phoneB);
+  const leadB = leadsRepo.findByContact(phoneB, 'whatsapp');
   assert.equal(leadB.matched_product, 'Celana Rimba Cargo');
 
   db.close();
@@ -514,7 +515,7 @@ test('HIGH-severity fix end-to-end: deactivating an UNRELATED item between Q1-se
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo, sent });
 
   const phone = '628507000001';
-  const q1Result = await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  const q1Result = await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
   assert.deepEqual(
     q1Result.decision.replies[1].split('\n').filter((line) => /^\d+\./.test(line)),
     ['1. Celana Rimba Cargo', '2. Jaket Rimba Outdoor', '3. Kaos Rimba Hitam', '4. Kaos Rimba Navy'],
@@ -529,10 +530,10 @@ test('HIGH-severity fix end-to-end: deactivating an UNRELATED item between Q1-se
   // fresh-query resolution used to fall into.
   assert.deepEqual(productsRepo.listActive().map((p) => p.name), ['Celana Rimba Cargo', 'Kaos Rimba Hitam', 'Kaos Rimba Navy']);
 
-  const answerResult = await processInboundMessage({ phoneNumber: phone, messageBody: '3', messageType: 'text' });
+  const answerResult = await processInboundMessage({ contactId: phone, messageBody: '3', messageType: 'text' });
   assert.equal(answerResult.decision.action, 'ANSWER_Q1');
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, 'Kaos Rimba Hitam', 'must resolve to what the customer actually saw at position 3, via the snapshot');
   assert.notEqual(lead.matched_product, 'Kaos Rimba Navy', 'must NOT silently substitute whatever a fresh re-query would put at position 3');
   assert.equal(lead.matched_product_score, 1.0, 'Kaos Rimba Hitam is still active, so this is a genuine confident match, not a downgrade');
@@ -550,18 +551,18 @@ test('HIGH-severity fix end-to-end: deactivating the item the customer actually 
   const { processInboundMessage } = buildProcessor({ leadsRepo, productsRepo, sent });
 
   const phone = '628507000002';
-  await processInboundMessage({ phoneNumber: phone, messageBody: 'halo', messageType: 'text' });
+  await processInboundMessage({ contactId: phone, messageBody: 'halo', messageType: 'text' });
 
   // This time the customer's OWN pick -- position 3, Kaos Rimba Hitam --
   // is the one that gets deactivated in the interim.
   const hitam = productsRepo.listAll().find((p) => p.name === 'Kaos Rimba Hitam');
   productsRepo.deactivate(hitam.id);
 
-  const answerResult = await processInboundMessage({ phoneNumber: phone, messageBody: '3', messageType: 'text' });
+  const answerResult = await processInboundMessage({ contactId: phone, messageBody: '3', messageType: 'text' });
   assert.equal(answerResult.decision.action, 'ANSWER_Q1', 'still an ordinary accepted answer, not a retry/fallback');
   assert.equal(answerResult.decision.replies.length, 0, 'Q2 must be suppressed, same as any other unmatched Q1 answer');
 
-  const lead = leadsRepo.findByPhone(phone);
+  const lead = leadsRepo.findByContact(phone, 'whatsapp');
   assert.equal(lead.matched_product, null, 'must NOT confidently match ANY product');
   assert.notEqual(lead.matched_product, 'Kaos Rimba Navy', 'must NOT silently substitute whatever a fresh re-query would put at that position');
   assert.equal(lead.matched_product_score, null);
