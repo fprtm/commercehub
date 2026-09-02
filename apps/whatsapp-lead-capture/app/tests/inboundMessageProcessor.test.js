@@ -28,9 +28,10 @@ test('FR-302: processInboundMessage produces identical Lead outcomes whether cal
     sendTextMessage: async (to, body) => {
       sent.push({ to, body });
     },
-    // NFR-603: every reply now goes through src/lib/humanizedTiming.js,
-    // which defaults to real delays -- an instant fake `sleep` keeps this
-    // test fast/deterministic (see tests/humanizedTiming.test.js for
+    // NFR-603: every reply now goes through @rimba/humanized-timing's
+    // humanizedTiming.js, which defaults to real delays -- an instant fake
+    // `sleep` keeps this test fast/deterministic (see
+    // packages/humanized-timing/test/humanizedTiming.test.js for
     // dedicated coverage of the real timing formula/orchestration itself).
     sleep: async () => {},
   });
@@ -45,7 +46,7 @@ test('FR-302: processInboundMessage produces identical Lead outcomes whether cal
   });
 
   // Shape the Baileys connector actually calls with (see
-  // src/services/baileysConnector.js's handleMessagesUpsert()) -- same
+  // @rimba/whatsapp-connector's baileysConnector.js's handleMessagesUpsert()) -- same
   // logical first-contact message, different channel/caller.
   await processInboundMessage({
     phoneNumber: '628222222222',

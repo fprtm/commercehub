@@ -25,7 +25,7 @@ const { createProductsRepo } = require('./services/productsRepo');
  *
  * @param {object} deps
  * @param {import('better-sqlite3').Database} deps.db
- * @param {ReturnType<typeof import('./services/metaClient').createMetaClient>} deps.metaClient
+ * @param {ReturnType<typeof import('@rimba/whatsapp-connector').createMetaClient>} deps.metaClient
  * @param {object} deps.questionsConfig
  * @param {string} deps.verifyToken
  * @param {string|undefined} deps.appSecret
@@ -36,7 +36,7 @@ const { createProductsRepo } = require('./services/productsRepo');
  *   (FR-301). Defaulted here (rather than required) so every pre-existing
  *   caller of createApp() -- including all 61 original tests -- keeps
  *   working unmodified, exactly as if this dual-mode change didn't exist.
- * @param {ReturnType<typeof import('./services/baileysConnector').createBaileysConnector>|null} [deps.baileysConnector]
+ * @param {ReturnType<typeof import('@rimba/whatsapp-connector').createBaileysConnector>|null} [deps.baileysConnector]
  *   - only relevant when whatsappMode is 'baileys'; used solely to render
  *   the pairing screen's live status (FR-303). createApp() never calls
  *   `.start()` on it -- that's src/server.js's job, same pattern as

@@ -68,7 +68,7 @@ test('FR-402 (unit): auto_reply_enabled=false -- inbound message still creates a
     sendTextMessage: async (to, body) => { sent.push({ to, body }); },
     settingsRepo,
     // NFR-603 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
-    // every reply now goes through src/lib/humanizedTiming.js, which
+    // every reply now goes through @rimba/humanized-timing's humanizedTiming.js, which
     // defaults to real delays -- an instant fake `sleep` keeps this test
     // fast/deterministic.
     sleep: async () => {},

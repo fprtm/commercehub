@@ -9,7 +9,7 @@ const DEFAULT_CONFIG_PATH = path.join(__dirname, '..', '..', 'config', 'products
 
 /**
  * FR-501: the Product catalog used for fuzzy-matching a customer's Q1
- * answer (see src/services/productMatcher.js) is configurable by the
+ * answer (see @rimba/product-matcher's productMatcher.js) is configurable by the
  * business owner without a code change -- the simplest reasonable
  * mechanism for this Entry-tier project, same config-file pattern already
  * established by config/questions.json / questionsLoader.js, rather than a

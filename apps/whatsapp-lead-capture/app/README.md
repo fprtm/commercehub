@@ -304,6 +304,20 @@ prompt text, and their Q1 answers are all free text (never a bare
 number), so they keep falling through to the unchanged fuzzy-matcher
 fallback path exactly as before.
 
+> **Post-migration note:** the "276 passed" figure above describes this
+> app's test count *before* the Turborepo monorepo migration
+> (`docs/sdd/specs/001-monorepo-migration/`), when `humanizedTiming.js`,
+> `baileysConnector.js`, `metaClient.js`, and `productMatcher.js` all still
+> lived inside this app. Those 4 modules (and their 77 tests) now live in
+> `packages/humanized-timing`, `packages/whatsapp-connector`, and
+> `packages/product-matcher` respectively, each with its own isolated test
+> suite (NFR-1103). This app's own suite is now **199 tests** — its
+> genuine integration/wiring coverage (routes, DB, state machine, the
+> app's own composition of the packaged modules) — not a reduced or
+> weakened suite. Total coverage across the monorepo is unchanged:
+> 10 + 32 + 35 + 199 = 276, run via `npx turbo run test` from the monorepo
+> root.
+
 ## Pausing auto-reply (FR-401..FR-403)
 
 The owner can turn the automated WhatsApp flow on/off without editing an env

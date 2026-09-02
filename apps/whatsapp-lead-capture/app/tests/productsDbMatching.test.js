@@ -7,7 +7,7 @@ const { startTestServer } = require('./helpers/testApp');
 
 /**
  * FR-702 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
- * proves fuzzy-matching (src/services/productMatcher.js, wired via
+ * proves fuzzy-matching (@rimba/product-matcher's productMatcher.js, wired via
  * src/services/inboundMessageProcessor.js) now reads its Product catalog
  * from the DATABASE (via productsRepo.listActive()), not from
  * config/products.json -- and that it's read FRESH per message, so a

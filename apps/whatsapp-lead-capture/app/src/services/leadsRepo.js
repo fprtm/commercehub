@@ -186,7 +186,7 @@ function createLeadsRepo(db) {
     /**
      * FR-503/FR-504: records the outcome of fuzzy-matching a Lead's
      * question1_answer against the Product catalog (see
-     * src/services/productMatcher.js). Called at most once per Q1 answer,
+     * @rimba/product-matcher's productMatcher.js). Called at most once per Q1 answer,
      * from inboundMessageProcessor.js, right after that answer is saved.
      *
      * Also reused, unmodified in shape, by the FR-802 post-completion

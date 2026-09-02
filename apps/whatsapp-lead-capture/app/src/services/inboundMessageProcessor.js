@@ -67,7 +67,7 @@ function guardAgainstInactiveFullCatalogWinner(matchResult, text, { productsRepo
  * decision logic) from what used to be `processMessage()` inside
  * src/routes/webhook.js -- that route is now just a thin adapter that maps
  * Meta's webhook payload shape onto this function's params, and the new
- * Baileys connector (src/services/baileysConnector.js) does the same for
+ * Baileys connector (@rimba/whatsapp-connector's baileysConnector.js) does the same for
  * Baileys' `messages.upsert` event shape.
  *
  * The state machine (stateMachine.js), the Lead repo (leadsRepo.js) and the
@@ -101,11 +101,11 @@ function guardAgainstInactiveFullCatalogWinner(matchResult, text, { productsRepo
  *   Optional, defaults to a no-op, same reasoning as `markAsRead` above.
  * @param {(ms: number) => Promise<unknown>} [deps.sleep] - injectable delay
  *   mechanism forwarded straight into
- *   src/lib/humanizedTiming.js#sendWithHumanizedTiming (NFR-603). Left
+ *   @rimba/humanized-timing#sendWithHumanizedTiming (NFR-603). Left
  *   undefined in production (real setTimeout-based delay); tests pass a
  *   fast/instant fake so the suite never actually waits in real time.
  * @param {() => number} [deps.random] - injectable RNG forwarded straight
- *   into src/lib/humanizedTiming.js#sendWithHumanizedTiming (NFR-603, same
+ *   into @rimba/humanized-timing#sendWithHumanizedTiming (NFR-603, same
  *   reasoning as `sleep`). Left undefined in production (real
  *   `Math.random`); tests pass a fixed function so the exact typing-delay
  *   duration -- and therefore how many times FR-603's periodic
@@ -243,7 +243,7 @@ function createInboundMessageProcessor({
       }
 
       // FR-502..FR-504: the instant a Q1 answer is accepted, fuzzy-match it
-      // against the Product catalog (see src/services/productMatcher.js).
+      // against the Product catalog (see @rimba/product-matcher's productMatcher.js).
       // Gated on `Array.isArray(products)` rather than truthiness so an
       // explicitly-empty catalog (`products: []`) still activates matching
       // -- NFR-502's "empty catalog -> always no match -> needs_review,
@@ -423,7 +423,7 @@ function createInboundMessageProcessor({
       if (autoReplyEnabled) {
         // FR-601/FR-604: every automated reply (ack, question, retry, or
         // fallback) is routed through the shared, transport-agnostic
-        // humanized-timing module (src/lib/humanizedTiming.js) instead of
+        // humanized-timing module (@rimba/humanized-timing's humanizedTiming.js) instead of
         // being sent immediately -- see
         // docs/sdd/changes/2026-09-01-humanized-timing-module.md and
         // Decision 001 for why this replaces the original 5s reply budget.

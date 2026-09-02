@@ -88,14 +88,14 @@ async function startTestServer(overrides = {}) {
     baileysConnector: overrides.baileysConnector,
     // NFR-603 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):
     // every outbound reply is now routed through
-    // src/lib/humanizedTiming.js, which by default waits real
+    // @rimba/humanized-timing's humanizedTiming.js, which by default waits real
     // (setTimeout-based) delays -- a 1-3s read pause plus a
     // length-proportional typing delay, per message. Without this
     // override, every webhook/reply test in the suite would incur those
     // real delays. An instant no-op sleep keeps the whole suite fast and
     // deterministic while the real formula/orchestration logic is still
     // proven separately, against real delay values, by
-    // tests/humanizedTiming.test.js.
+    // packages/humanized-timing/test/humanizedTiming.test.js.
     sleep: overrides.sleep || (async () => {}),
     // Post-review fix: `random` must also be fixed, not just `sleep`.
     // With real Math.random() jitter, a reply whose *base* typing duration
@@ -104,7 +104,7 @@ async function startTestServer(overrides = {}) {
     // 20s from one test run to the next, making the number of
     // sendTypingIndicator calls -- and therefore any test asserting an
     // exact count -- flaky. `() => 0.5` neutralizes jitter entirely (see
-    // src/lib/humanizedTiming.js's doc comment), so the same fixed
+    // @rimba/humanized-timing's humanizedTiming.js doc comment), so the same fixed
     // duration is computed every run.
     random: overrides.random || (() => 0.5),
     // FR-501..FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):

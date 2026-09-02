@@ -28,7 +28,7 @@ function toIsoTimestamp(unixSecondsString) {
  * @param {import('better-sqlite3').Database} deps.db - unused directly, kept for symmetry/future use
  * @param {ReturnType<typeof import('../services/leadsRepo').createLeadsRepo>} deps.leadsRepo
  * @param {ReturnType<typeof import('../services/failedEventsRepo').createFailedEventsRepo>} deps.failedEventsRepo
- * @param {ReturnType<typeof import('../services/metaClient').createMetaClient>} deps.metaClient
+ * @param {ReturnType<typeof import('@rimba/whatsapp-connector').createMetaClient>} deps.metaClient
  * @param {object} deps.questionsConfig - loaded config/questions.json
  * @param {ReturnType<typeof import('../services/settingsRepo').createSettingsRepo>} [deps.settingsRepo]
  *   - FR-402 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md), forwarded

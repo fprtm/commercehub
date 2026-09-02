@@ -94,8 +94,9 @@ test('FR-601/FR-604 POST /webhook: an inbound message triggers a read receipt an
     // inboundMessageProcessor.js, not just metaClient.js in isolation.
     // Asserts "at least once per reply" rather than a single exact count:
     // the *exact* refresh count for a given message length is
-    // src/lib/humanizedTiming.js's concern and is already deterministically
-    // proven, per-formula, in tests/humanizedTiming.test.js -- pinning an
+    // @rimba/humanized-timing's humanizedTiming.js's concern and is already
+    // deterministically proven, per-formula, in
+    // packages/humanized-timing/test/humanizedTiming.test.js -- pinning an
     // exact number here would just make this wiring test fragile to
     // TEST_CONFIG's message lengths relative to the FR-603 threshold.
     assert.equal(ctx.metaClient.readReceipts.length, 1, 'exactly one read receipt for the one inbound message (not per-reply)');

@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS leads (
   -- Added for docs/sdd/changes/2026-09-01-fuzzy-product-matching.md
   -- (FR-502..FR-504). `matched_product` is the Product catalog name the
   -- customer's question1_answer was fuzzy-matched against (NULL when no
-  -- match was found/attempted -- see src/services/productMatcher.js).
+  -- match was found/attempted -- see @rimba/product-matcher's productMatcher.js).
   -- `needs_review` flags a low-confidence-or-no-match Q1 answer for the
   -- dashboard so the owner can interpret it manually (FR-504); it is a
   -- separate flag rather than a new `status` value so it composes with
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS leads (
   needs_review INTEGER NOT NULL DEFAULT 0 CHECK (needs_review IN (0, 1)),
   -- Added for docs/sdd/changes/2026-09-02-capture-post-completion-messages.md
   -- (FR-801..FR-803). `matched_product_score` persists the confidence score
-  -- (0-1, from src/services/productMatcher.js) behind whatever is currently
+  -- (0-1, from @rimba/product-matcher's productMatcher.js) behind whatever is currently
   -- recorded in `matched_product` -- whether that came from the original Q1
   -- answer or from a later post-completion message that raised it (FR-802:
   -- "never let a later, lower-confidence message downgrade an existing good
@@ -100,7 +100,7 @@ INSERT OR IGNORE INTO app_settings (id, auto_reply_enabled) VALUES (1, 1);
 -- (FR-702): Products move from config/products.json (see
 -- src/services/productsLoader.js -- now legacy/seed-only, see
 -- src/services/productsSeed.js) into the database as the source of truth,
--- both for fuzzy-matching (src/services/productMatcher.js, via
+-- both for fuzzy-matching (@rimba/product-matcher's productMatcher.js, via
 -- src/services/productsRepo.js's listActive()) and for full CRUD
 -- management from the dashboard (src/routes/products.js).
 --

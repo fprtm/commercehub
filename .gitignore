@@ -2,9 +2,22 @@ node_modules/
 .turbo/
 dist/
 .env
+.env.local
+.env.*.local
 data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/baileys-auth/
 npm-debug.log*
+
+# Defense-in-depth: common secret/credential-file shapes, independent of
+# the extraction script's own guardrail (scripts/extract-app.js), which
+# handles this for delivered client output -- this is about the
+# monorepo's own git history/working tree never picking these up in the
+# first place.
+credentials.json
+*.pem
+*.key
+*.pfx
+*.p12

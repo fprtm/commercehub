@@ -13,7 +13,7 @@ const { log } = require('../utils/logger');
  *
  * @param {object} deps
  * @param {string} deps.whatsappMode - 'cloud_api' | 'baileys'
- * @param {ReturnType<typeof import('../services/baileysConnector').createBaileysConnector>|null} deps.baileysConnector
+ * @param {ReturnType<typeof import('@rimba/whatsapp-connector').createBaileysConnector>|null} deps.baileysConnector
  *   - null when whatsappMode is 'cloud_api' (FR-301: the unconfigured
  *   mode's code path is not touched -- no connector is even constructed).
  */

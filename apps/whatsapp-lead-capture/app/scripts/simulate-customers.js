@@ -580,7 +580,7 @@ async function main() {
     // Full end-to-end outcome. NOTE (disclosed, not swept under the rug):
     // this specific simulated message is 42 stemmed tokens long with
     // "kaos" repeated 4 times, only 3 of which count as "accounted for" by
-    // the length-penalty formula (src/services/productMatcher.js's
+    // the length-penalty formula (@rimba/product-matcher's productMatcher.js's
     // tokenCoverage()) -- so even with the denylist fixed (flaggedTerms
     // above IS empty, confirming FR-904 itself works), the raw score for
     // this message (~0.11) still lands well below DEFAULT_MATCH_THRESHOLD
