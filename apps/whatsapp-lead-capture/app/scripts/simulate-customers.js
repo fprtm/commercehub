@@ -15,7 +15,7 @@
  * run doesn't take real minutes -- exactly the same seam
  * tests/helpers/testApp.js already uses for its mock Meta client.
  *
- * Each of the 15 customers gets its own phone number and is driven
+ * Each of the 18 customers gets its own phone number and is driven
  * message-by-message (never batched) through processInboundMessage(), the
  * single shared entry point every inbound message -- Cloud API or Baileys
  * -- goes through in production.
@@ -29,6 +29,27 @@
  * found failing (Bugs 1/2/3); every other scenario also gets an assertion
  * so a regression in any of the 12 previously-passing scenarios is caught
  * automatically too. Exits non-zero if any check fails.
+ *
+ * docs/sdd/changes/2026-09-02-numbered-product-selection.md (FR-1001..
+ * FR-1006): Q1 is now a dynamically-generated numbered list of active
+ * products, and a bare-number reply deterministically selects a product
+ * with zero fuzzy-matching involved -- the (four-times-hardened) fuzzy
+ * matcher exercised by scenarios 1-15 below is now a FALLBACK layer for
+ * free-text replies (FR-1003), not the primary path. Scenarios 1-15's own
+ * message content is left as free text almost everywhere on purpose: every
+ * one of them is specifically stress-testing a fuzzy-matching behavior
+ * (typo tolerance, aliases, ambiguity, the intent denylist, the length
+ * penalty, the inactive-full-catalog guard) that only exists on the
+ * free-text path -- converting them to numbered replies would stop
+ * exercising the exact mechanism each scenario exists to test. The one
+ * exception is scenario 1 ("happy path, clean"), converted to a numbered
+ * reply below to demonstrate what is now the actual default/primary path a
+ * real customer hits. Three new scenarios (16-18) were added at the end to
+ * cover what scenarios 1-15 structurally cannot: tolerant number parsing,
+ * an out-of-range number's retry-then-fallback, and the empty-catalog
+ * fallback (FR-1005) -- appended rather than interleaved so scenarios
+ * 1-15's existing IDs (referenced throughout this file's comments and the
+ * change docs) stay stable.
  *
  * Run: node scripts/simulate-customers.js
  */
@@ -198,30 +219,42 @@ async function main() {
   }
 
   // ==================================================================
-  // Scenario 1 — Happy path, clean
+  // Scenario 1 — Happy path, clean (docs/sdd/changes/2026-09-02-numbered-
+  // product-selection.md: this is now the actual default/primary path a
+  // real customer hits -- a bare numbered reply, not free text)
   // ==================================================================
   {
     const phone = '628190000001';
     const turns = [];
     turns.push({ ...(await sendMessage(phone, 'Halo')) }); // trigger START_FLOW (content discarded by design)
-    turns.push({ ...(await sendMessage(phone, 'Halo, ada kaos rimba navy?')) }); // Q1 answer
+    // Q1 is now a numbered list built live from activeCatalog (alphabetical
+    // listActive() order: 1 Celana Rimba Cargo, 2 Jaket Rimba Outdoor,
+    // 3 Kaos Rimba Hitam, 4 Kaos Rimba Navy) -- "4" deterministically
+    // selects Kaos Rimba Navy with zero fuzzy-matching involved (FR-1002).
+    turns.push({ ...(await sendMessage(phone, '4')) }); // Q1 answer, numbered selection
     turns.push({ ...(await sendMessage(phone, 'size M ya, WA aja')) }); // Q2 answer
     pushResult({
       id: 1,
-      title: 'Happy path, clean',
+      title: 'Happy path, clean (numbered selection)',
       phone,
-      expectation: 'matched_product = Navy-like, needs_review=false, both answers saved.',
+      expectation: 'FR-1002: matched_product = Kaos Rimba Navy, matched_product_score = 1.0, needs_review=false, both answers saved.',
       turns,
       finalLead: leadsRepo.findByPhone(phone),
     });
     const lead1 = leadsRepo.findByPhone(phone);
-    check(1, 'matched_product is set', lead1.matched_product, (v) => v !== null);
+    check(1, 'FR-1002: numbered reply "4" deterministically selects Kaos Rimba Navy', lead1.matched_product, 'Kaos Rimba Navy');
+    check(1, 'NFR-1002: score is exactly 1.0 (no fuzzy scoring involved)', lead1.matched_product_score, 1.0);
     check(1, 'needs_review is false', Boolean(lead1.needs_review), false);
     check(1, 'question2_answer saved', lead1.question2_answer, (v) => v !== null);
   }
 
   // ==================================================================
   // Scenario 2 — Vague-then-clarify (the exact fixed-bug pattern)
+  // Left as free text on purpose: the bug this covers (FR-901/FR-902) is in
+  // the POST-COMPLETION re-match path (inboundMessageProcessor.js's NO_OP
+  // block), which calls matchProduct() directly and never goes through
+  // decideNextAction()'s Q1-numbered-list logic at all -- this scenario is
+  // structurally untouched by the numbered-product-selection change.
   // ==================================================================
   {
     const phone = '628190000002';
@@ -507,6 +540,12 @@ async function main() {
 
   // ==================================================================
   // Scenario 13 — Long rambling message, product mention buried deep
+  // Left as free text on purpose: this is inherently a message a real
+  // customer who ignored the numbered list would send -- it is exactly
+  // the FR-1003 fallback case (non-numeric reply -> existing fuzzy
+  // matcher), so it is unaffected by, and NOT fixed by, the
+  // numbered-product-selection change. The known scoring gap documented
+  // below is a separate, pre-existing, already-twice-tuned mechanism.
   // ==================================================================
   {
     const phone = '628190000013';
@@ -583,6 +622,14 @@ async function main() {
 
   // ==================================================================
   // Scenario 15 — Product deactivated mid-conversation
+  // Left as free text on purpose: this specifically has to NAME the
+  // deactivated product to exercise the FR-901 inactive-full-catalog
+  // guard (FR-1003 fallback path) -- with the numbered list, a
+  // deactivated product simply cannot appear/be selected at all. Scenario
+  // 16 below (run immediately after this one) doubles as an NFR-1003
+  // freshness check for exactly that: its numbered list is built AFTER
+  // this scenario deactivated Kaos Rimba Navy, and correctly no longer
+  // shows it.
   // ==================================================================
   {
     const phone = '628190000015';
@@ -612,6 +659,102 @@ async function main() {
     check(15, 'FR-901: no confident match to ANY product once the named product is deactivated', lead15.matched_product, null);
     check(15, 'FR-901: specifically not silently misrouted to Kaos Rimba Hitam', lead15.matched_product, (v) => v !== 'Kaos Rimba Hitam');
     check(15, 'needs_review is true', Boolean(lead15.needs_review), true);
+  }
+
+  // ==================================================================
+  // Scenario 16 — Numbered selection, tolerant parsing + NFR-1003 freshness
+  // (docs/sdd/changes/2026-09-02-numbered-product-selection.md, FR-1002)
+  // ==================================================================
+  {
+    const phone = '628190000016';
+    const turns = [];
+    turns.push({ ...(await sendMessage(phone, 'Halo')) }); // trigger
+    const q1Turn = turns[0];
+    console.log(`  [scenario 16] Q1 numbered list shown: ${JSON.stringify(q1Turn.repliesSent[1])}`);
+    // "no 3" (tolerant wrapping -- FR-1002) selects position 3, which is
+    // Kaos Rimba Hitam under the active catalog AFTER scenario 15
+    // deactivated Kaos Rimba Navy (alphabetical listActive() order: 1
+    // Celana Rimba Cargo, 2 Jaket Rimba Outdoor, 3 Kaos Rimba Hitam) --
+    // this doubles as the NFR-1003 freshness proof: Navy is gone from the
+    // list entirely, not just unselectable.
+    turns.push({ ...(await sendMessage(phone, 'no 3')) }); // Q1 answer, tolerant numbered selection
+    pushResult({
+      id: 16,
+      title: 'Numbered selection with tolerant parsing ("no 3") + freshness',
+      phone,
+      expectation: 'FR-1002: deterministically selects Kaos Rimba Hitam, score=1.0. NFR-1003: Kaos Rimba Navy absent from the list shown (deactivated in scenario 15).',
+      turns,
+      finalLead: leadsRepo.findByPhone(phone),
+    });
+    const lead16 = leadsRepo.findByPhone(phone);
+    check(16, 'FR-1002: tolerant "no 3" deterministically selects Kaos Rimba Hitam', lead16.matched_product, 'Kaos Rimba Hitam');
+    check(16, 'NFR-1002: score is exactly 1.0 (no fuzzy scoring involved)', lead16.matched_product_score, 1.0);
+    check(16, 'needs_review is false', Boolean(lead16.needs_review), false);
+    check(
+      16,
+      'NFR-1003: the numbered list shown does NOT include the product deactivated in scenario 15',
+      q1Turn.repliesSent[1],
+      (v) => typeof v === 'string' && !v.includes('Kaos Rimba Navy'),
+    );
+  }
+
+  // ==================================================================
+  // Scenario 17 — Out-of-range numbered reply (FR-1004): reuses the
+  // existing retry-then-fallback mechanism, not a new/parallel error path.
+  // ==================================================================
+  {
+    const phone = '628190000017';
+    const turns = [];
+    turns.push({ ...(await sendMessage(phone, 'Halo')) }); // trigger
+    // Only 3 products are active at this point (scenario 15 deactivated
+    // one) -- "9" is out of range for any of them.
+    turns.push({ ...(await sendMessage(phone, '9')) }); // Q1, out-of-range number (1st attempt) -> RETRY
+    turns.push({ ...(await sendMessage(phone, '9')) }); // Q1, out-of-range number again (2nd attempt) -> FALLBACK
+    pushResult({
+      id: 17,
+      title: 'Out-of-range numbered reply (FR-1004)',
+      phone,
+      expectation: 'FR-1004: 1st out-of-range number retries with the same list; 2nd falls back -- identical shape to any other structurally-unusable reply.',
+      turns,
+      finalLead: leadsRepo.findByPhone(phone),
+    });
+    const lead17 = leadsRepo.findByPhone(phone);
+    check(17, 'FR-1004: 1st out-of-range number triggers RETRY (one follow-up attempt)', turns[1].action, 'RETRY');
+    check(17, 'FR-1004: 2nd out-of-range number in a row triggers FALLBACK', turns[2].action, 'FALLBACK');
+    check(17, 'no product was ever matched', lead17.matched_product, null);
+    check(17, 'fallback_triggered is true', Boolean(lead17.fallback_triggered), true);
+  }
+
+  // ==================================================================
+  // Scenario 18 — Empty active catalog (FR-1005): Q1 gracefully falls back
+  // to the original free-text prompt instead of an empty list. Runs LAST
+  // and deliberately deactivates every remaining active product, so it
+  // must not be followed by any scenario that expects an active catalog.
+  // ==================================================================
+  {
+    const phone = '628190000018';
+    for (const product of productsRepo.listActive()) {
+      productsRepo.deactivate(product.id);
+    }
+    console.log(`  [scenario 18] Deactivated every remaining product. Active catalog is now: ${JSON.stringify(productsRepo.listActive())}`);
+
+    const turns = [];
+    turns.push({ ...(await sendMessage(phone, 'Halo')) }); // trigger
+    const q1Turn = turns[0];
+    turns.push({ ...(await sendMessage(phone, 'kaos apa aja yang ada?')) }); // Q1 answer, ordinary free text (no catalog to number against)
+    pushResult({
+      id: 18,
+      title: 'Empty active catalog falls back to the original free-text Q1 prompt',
+      phone,
+      expectation: 'FR-1005: Q1 is the original static prompt (config/questions.json), not a crash/empty list; NFR-502: empty catalog -> needs_review=true, matched_product=null.',
+      turns,
+      finalLead: leadsRepo.findByPhone(phone),
+    });
+    const lead18 = leadsRepo.findByPhone(phone);
+    check(18, 'FR-1005: Q1 falls back to the original static free-text prompt', q1Turn.repliesSent[1], questionsConfig.questions[0].text);
+    check(18, 'Q1 answer accepted as ordinary free text (no crash)', lead18.question1_answer, (v) => v !== null);
+    check(18, 'NFR-502: empty catalog -> no match', lead18.matched_product, null);
+    check(18, 'NFR-502: empty catalog -> needs_review=true, never a crash', Boolean(lead18.needs_review), true);
   }
 
   // ------------------------------------------------------------------

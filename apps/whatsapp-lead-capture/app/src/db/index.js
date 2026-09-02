@@ -65,6 +65,9 @@ function ensureLeadsColumns(db) {
   const newColumns = [
     ['matched_product_score', 'REAL'],
     ['additional_notes', 'TEXT'],
+    // docs/sdd/changes/2026-09-02-numbered-product-selection.md, HIGH-severity
+    // post-review fix -- see schema.sql's doc comment on this column.
+    ['shown_product_ids', 'TEXT'],
   ];
   for (const [name, type] of newColumns) {
     if (!existingColumns.has(name)) {

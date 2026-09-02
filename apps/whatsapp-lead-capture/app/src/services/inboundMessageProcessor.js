@@ -201,10 +201,21 @@ function createInboundMessageProcessor({
       messageId,
     }) {
       const existingLead = leadsRepo.findByPhone(phoneNumber);
+      // FR-1001/FR-1003/FR-1005 (docs/sdd/changes/2026-09-02-numbered-product-selection.md):
+      // computed here, BEFORE decideNextAction(), rather than after (as it
+      // used to be, right before the fuzzy-matching block below) -- the
+      // state machine now needs this same catalog both to build Q1's
+      // numbered-list prompt and to interpret a numbered reply to it.
+      // Precedence (`products` static array wins over `productsRepo`) and
+      // freshness (`productsRepo.listActive()` read fresh on every call,
+      // never cached) are both unchanged from before this change -- see
+      // the constructor's doc comment above for the full FR-702 reasoning.
+      const catalog = Array.isArray(products) ? products : productsRepo ? productsRepo.listActive() : undefined;
       const decision = decideNextAction({
         existingLead,
         messageText: messageBody,
         config: questionsConfig,
+        activeProducts: catalog,
       });
 
       let lead = existingLead;
@@ -216,6 +227,19 @@ function createInboundMessageProcessor({
       }
       if (decision.leadPatch && lead) {
         lead = leadsRepo.saveAnswers(lead.id, decision.leadPatch);
+      }
+
+      // HIGH-severity post-review fix (docs/sdd/changes/2026-09-02-numbered-
+      // product-selection.md): whenever this turn actually (re)sent Q1's
+      // numbered list (START_FLOW, or a RETRY while Q1 is pending),
+      // decideNextAction() returns the exact ordered product-ID snapshot of
+      // what was shown -- persisted here so a LATER numbered reply from
+      // this same lead is resolved against what they actually saw, never a
+      // fresh productsRepo.listActive() re-query. See stateMachine.js's
+      // header comment (judgment call 4) and schema.sql's doc comment on
+      // `shown_product_ids` for the full misrouting bug this prevents.
+      if (decision.shownProductIdsToPersist && lead) {
+        lead = leadsRepo.updateShownProductIds(lead.id, decision.shownProductIdsToPersist);
       }
 
       // FR-502..FR-504: the instant a Q1 answer is accepted, fuzzy-match it
@@ -239,13 +263,36 @@ function createInboundMessageProcessor({
       // they send is handled completely normally by the (unmodified)
       // state machine.
       let replies = decision.replies;
-      // FR-702: `products` (static array) wins when explicitly provided --
-      // see the constructor's doc comment above for why. Otherwise, an
-      // injected `productsRepo` is read fresh, right here, right before
-      // matching -- never at construction time -- so a dashboard
-      // deactivate/edit is reflected on the very next message.
-      const catalog = Array.isArray(products) ? products : productsRepo ? productsRepo.listActive() : undefined;
-      if (decision.action === ACTIONS.ANSWER_Q1 && lead && Array.isArray(catalog)) {
+      if (decision.action === ACTIONS.ANSWER_Q1 && lead && decision.numberedProductMatch) {
+        // FR-1002/NFR-1002: the state machine already deterministically
+        // resolved this Q1 answer to an exact catalog entry via its 1-based
+        // list position -- the fuzzy matcher (matchProduct(), below) is
+        // NEVER invoked for this path. `replies` is left as-is (Q2 still
+        // gets sent), same shape as the FR-503 confident-match branch below.
+        lead = leadsRepo.updateProductMatch(lead.id, {
+          matchedProduct: decision.numberedProductMatch.name,
+          matchedProductScore: 1.0,
+          needsReview: false,
+        });
+      } else if (decision.action === ACTIONS.ANSWER_Q1 && lead && decision.numberedProductStale) {
+        // HIGH-severity post-review fix: the customer's numbered reply
+        // resolved (via the shown_product_ids snapshot) to a specific
+        // product that is no longer active right now -- the catalog
+        // changed between Q1-send and this reply. NEVER confidently
+        // substitute whatever a fresh re-query would now put at that same
+        // position instead (that's the exact misrouting bug this fixes),
+        // and don't bother calling the fuzzy matcher on a bare digit
+        // string either (structurally meaningless -- it would only ever
+        // score 0/no-match anyway). Treated exactly like FR-504's no-match
+        // branch below: Q2 suppressed, needs_review flagged, so the owner
+        // sees this needs a manual look instead of a silently wrong match.
+        lead = leadsRepo.updateProductMatch(lead.id, { matchedProduct: null, matchedProductScore: null, needsReview: true });
+        replies = [];
+      } else if (decision.action === ACTIONS.ANSWER_Q1 && lead && Array.isArray(catalog)) {
+        // FR-1003: a Q1 reply that did NOT resolve to a numbered selection
+        // (free text, or no numbered list was even shown -- FR-1005) falls
+        // through to the existing, four-times-hardened fuzzy matcher below,
+        // completely unchanged.
         const rawMatchResult = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
         // FR-901: never return a confident match that only "wins" because
         // the actually-best-matching product was deactivated -- see the

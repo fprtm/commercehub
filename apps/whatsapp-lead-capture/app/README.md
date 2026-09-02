@@ -272,6 +272,38 @@ additive, default-preserving parameters (`settingsRepo` on
 `inboundMessageProcessor.js` and `leads.js`), same pattern the dual-mode
 change already used; it did not edit any existing test.
 
+**Latest change:** `docs/sdd/changes/2026-09-02-numbered-product-selection.md`
+(FR-1001..FR-1006). **Current result: 276 passed, 0 failed** — the
+pre-existing 245 **all still pass completely unmodified** (NFR-1001), plus
+31 tests in `tests/numberedProductSelection.test.js` covering:
+`buildQ1Message()`/`parseNumberSelection()` as pure functions, the
+`decideNextAction()` wiring (numbered selection resolved against the
+`shown_product_ids` snapshot, tolerant-parsing variants, out-of-range
+retry-then-fallback, FR-1005's empty-catalog fallback), end-to-end
+coverage through `createInboundMessageProcessor()` against a real
+`productsRepo` (including an `NFR-1003` freshness check: a product
+deactivated between two customers' first message disappears from the
+*next* customer's numbered list entirely), and — added after an
+independent post-review found a HIGH-severity issue in an earlier version
+of this feature — dedicated "HIGH-severity fix" tests (both a
+`decideNextAction()`-level pair and an end-to-end pair) reproducing a
+product being deactivated *between* Q1-send and the reply, proving the
+reply resolves against what was actually shown (not a fresh, possibly
+different, re-query) and that the customer's own pick being deactivated
+correctly flags `needs_review` instead of substituting a different
+product — see "Snapshot, not a fresh re-query" under "Numbered product
+selection for Q1" above. None of the pre-existing 245 needed content
+changes — the new `activeProducts` parameter on `decideNextAction()` is
+optional and additive (same pattern as `productsRepo` on the processor
+itself), so every existing caller/test that doesn't pass it keeps
+exercising the exact original free-text Q1 prompt unmodified; the tests
+that *do* inject a product catalog (`tests/productMatching.test.js`,
+`tests/productsDbMatching.test.js`, `tests/inactiveFullCatalogGuard.test.js`,
+`tests/postCompletionMessages.test.js`) none of them assert Q1's literal
+prompt text, and their Q1 answers are all free text (never a bare
+number), so they keep falling through to the unchanged fuzzy-matcher
+fallback path exactly as before.
+
 ## Pausing auto-reply (FR-401..FR-403)
 
 The owner can turn the automated WhatsApp flow on/off without editing an env
@@ -444,12 +476,159 @@ Edit `config/questions.json` — no code change required:
     { "id": "q2", "text": "What size are you looking for, or how would you prefer we contact you?" }
   ],
   "fallbackMessage": "Thanks for your message — a team member will follow up with you shortly.",
-  "completionMessage": "Thanks! We've got what we need — a team member will follow up with you shortly."
+  "completionMessage": "Thanks! We've got what we need — a team member will follow up with you shortly.",
+  "q1ListIntro": "Ada beberapa pilihan nih kak:",
+  "q1ListInstruction": "Balas nomornya ya, atau ketik aja nama produknya kalau udah tau"
 }
 ```
 
 The file must define exactly 2 questions (per FR-002's "up to 2 sequential
-qualifying questions") and is re-read on every server start.
+qualifying questions") and is re-read on every server start. `questions[0].text`
+is still required and still used — as of the change below, it's now
+specifically the FR-1005 fallback prompt for when there's no active
+product catalog to build a numbered list from, rather than the one Q1
+message customers see day to day. `q1ListIntro`/`q1ListInstruction` are
+optional (defaulting to the Indonesian wording shown above) and only
+control the wrapping text around the numbered list described next — see
+"Numbered product selection for Q1" below.
+
+## Numbered product selection for Q1 (FR-1001..FR-1006)
+
+`docs/sdd/changes/2026-09-02-numbered-product-selection.md`. Four review
+rounds on free-text fuzzy product matching (see "Fuzzy product matching"
+below) kept finding real bugs, each one a variation on the same root
+problem: guessing which product a customer meant from free text is
+inherently uncertain. The root fix isn't a 5th patch — it's removing the
+*need* to guess for the common case. Q1 is now a **dynamically-generated
+numbered list** of the currently-active product catalog
+(`productsRepo.listActive()`, read fresh — same "no caching, no stale
+data" pattern as everywhere else in this app), sent right after the
+acknowledgment:
+
+```
+Ada beberapa pilihan nih kak:
+1. Kaos Rimba Navy
+2. Kaos Rimba Hitam
+3. Celana Rimba Cargo
+4. Jaket Rimba Outdoor
+Balas nomornya ya, atau ketik aja nama produknya kalau udah tau
+```
+
+Only the intro line ("Ada beberapa...") and the instruction line ("Balas
+nomornya...") are config-driven (`q1ListIntro`/`q1ListInstruction` above,
+FR-1006); the numbered product lines themselves always come live from the
+database, never from config. This is deliberately still plain
+conversational text, not WhatsApp's native list/button UI — that was
+researched and explicitly rejected (feels too obviously automated,
+undercuts the humanized-timing work in FR-601..FR-604, and Baileys
+officially dropped native button/list support in 2024, which would create
+a Cloud-API-vs-Baileys UX split).
+
+**Replying with a number** (FR-1002) — tolerant of common wrapping ("2",
+"2.", "no 2", "nomor 2", "2 dong") — deterministically selects that exact
+1-based position in the list that was shown: `matched_product` is set to
+its name, `matched_product_score` is exactly `1.0`, `needs_review` is
+`false`, and the fuzzy matcher is never invoked for this path (NFR-1002).
+Selecting position 2 out of a 4-product list always resolves to the exact
+2nd product — no scoring, no ambiguity logic, nothing probabilistic. The
+position is resolved against a **persisted snapshot of what this specific
+customer was actually shown** (`leads.shown_product_ids`), not a fresh
+catalog re-query — see "Snapshot, not a fresh re-query" below for why that
+distinction is load-bearing.
+
+**Replying with anything else** falls through to exactly one of two
+existing, unmodified mechanisms, per what the reply actually is:
+
+- **A number that's out of range** (e.g. "5" when only 4 products are
+  shown) is treated as a structurally-unusable response (FR-1004) — the
+  *same* retry-then-fallback mechanism this app already used for an
+  empty/non-text message (FR-002) fires: one retry re-sending the same
+  numbered list, then the fallback message on a second unusable reply in a
+  row. Not a new, parallel error path.
+- **Free text that isn't a number at all** (a product name, a question, a
+  typo, anything) falls through to the existing fuzzy product matcher
+  (FR-1003) — see "Fuzzy product matching" below, which this change
+  demotes from *the* Q1-answer mechanism to a **fallback layer** for
+  customers who ignore the numbered format and just type what they mean,
+  exactly as it always worked.
+
+**Empty catalog (FR-1005)**: if there are zero active products when Q1 is
+about to be sent, Q1 gracefully falls back to the original static
+free-text prompt (`config.questions[0].text`) instead of showing an empty
+list — a fresh install with no catalog configured yet doesn't crash or
+send a broken message, and (since there's nothing to number against) no
+number-parsing is attempted on the answer either; it's handled exactly
+like today's pre-existing free-text flow.
+
+**Freshness (NFR-1003)**: a product added/deactivated/reactivated via the
+`/products` dashboard is reflected in the very next customer's numbered
+list — the list itself is always built from a fresh
+`productsRepo.listActive()` call, same "always read fresh" guarantee
+`productsRepo` already provides matching (FR-702) and the auto-reply
+toggle (FR-402/NFR-401). What changed after a post-review fix (below) is
+how a *reply* to an already-sent list gets resolved.
+
+### Snapshot, not a fresh re-query (post-review fix, HIGH-severity)
+
+An earlier version of this feature resolved a numbered reply by re-running
+`productsRepo.listActive()` fresh at answer-time — reusing the exact same
+"always read fresh, no caching" pattern used for *sending* the list. That
+turned out to be the wrong call for *resolving a reply to a list already
+sent*, and reopened FR-901's original misrouting bug shape through a new
+mechanism: if the catalog changes in the window between Q1 being sent and
+the customer's reply — e.g. the owner deactivates a completely different
+product than the one this customer is about to pick — position numbers
+can silently shift to mean something else. A customer shown `1. Celana
+Rimba Cargo, 2. Jaket Rimba Outdoor, 3. Kaos Rimba Hitam, 4. Kaos Rimba
+Navy` who replies "3" means Kaos Rimba Hitam. If the owner deactivates
+Jaket Rimba Outdoor (item 2, unrelated to the customer's pick) before that
+reply arrives, a *fresh* re-query at answer-time is `[Celana, Hitam,
+Navy]` — position 3 in that fresh list is Kaos Rimba Navy, not Hitam. The
+old code would have confidently recorded `matched_product="Kaos Rimba
+Navy"`, `matched_product_score=1.0`, `needs_review=false` — a silent,
+maximum-confidence match to the **wrong product**, worse than the original
+fuzzy-matcher bugs it replaced (those at least flagged `needs_review`;
+this reported total confidence) and never touching
+`guardAgainstInactiveFullCatalogWinner` (the FR-901 fix) at all, since
+that function is only ever called from the fuzzy-matching branch — the
+numbered-selection branch skipped it entirely.
+
+**The fix**: a new `leads.shown_product_ids` column (JSON-encoded array of
+`products.id`, see `src/db/schema.sql`) persists the exact ordered product
+IDs Q1's list showed THIS specific lead, written via
+`leadsRepo.updateShownProductIds()` whenever `decideNextAction()` (re)sends
+Q1's list (on `START_FLOW`, and on a `RETRY` — FR-1004's retry re-shows
+the list and so re-snapshots it too, in case it changed since the original
+send). A numbered reply's position is now resolved **against this
+snapshot, never a fresh query** — "3" always means the 3rd item this
+specific customer actually saw. The resolved product ID is then
+cross-checked against a fresh `productsRepo.listActive()` call:
+
+- **Still active** — proceeds exactly as before: confident match,
+  `matched_product_score=1.0`, `needs_review=false`, Q2 sent. In the
+  example above, this now correctly resolves to Kaos Rimba Hitam (still
+  active — only Jaket was deactivated), not the wrong product a fresh
+  re-query would have produced.
+- **Deactivated in the interim** (e.g. the customer's OWN pick, not an
+  unrelated item, got deactivated) — **not** a confident match and
+  **never** silently substituted with whatever a fresh query would now put
+  at that position. Treated exactly like FR-504's fuzzy-no-match branch:
+  `matched_product=null`, `matched_product_score=null`,
+  `needs_review=true`, Q2 suppressed — the owner sees it needs a manual
+  look instead of the bot confidently telling the customer about a product
+  they never asked about.
+
+See `tests/numberedProductSelection.test.js`'s "HIGH-severity fix" tests
+for both scenarios reproduced exactly (an unrelated deactivation not
+misrouting the reply, and the customer's own pick being deactivated
+correctly flagging `needs_review` instead of substituting a different
+product).
+
+An existing Lead from before this column existed (or one whose Q1 used the
+FR-1005 empty-catalog fallback, which never showed a numbered list at all)
+has `shown_product_ids=null` — a numeric-looking reply for that lead is
+just accepted as ordinary free text (no snapshot to resolve against), the
+same behavior as today.
 
 ## Dashboard navigation (FR-701)
 
@@ -473,11 +652,18 @@ somewhere instead of being a dead link.
 
 ## Fuzzy product matching (FR-501..FR-504) and Product management (FR-702)
 
-`docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`. Every customer's
-answer to Q1 ("Which product are you interested in?") is now fuzzy-matched
-against a configured Product catalog, using **classical NLP only** —
-Indonesian stemming + string similarity, **deliberately not an LLM** (see
-"What this is not", below).
+`docs/sdd/changes/2026-09-01-fuzzy-product-matching.md`. **As of
+`docs/sdd/changes/2026-09-02-numbered-product-selection.md` (see "Numbered
+product selection for Q1" above), this section describes the FALLBACK
+layer, not the primary path** — a customer who replies to Q1 with a number
+is matched deterministically and never reaches any of this. Everything
+below still applies verbatim to a customer who ignores the numbered list
+and replies with free text (a product name, a question, anything that
+doesn't parse as a number) — the matching behavior itself is completely
+unchanged by that later change (FR-1003). A customer's free-text answer to
+Q1 is fuzzy-matched against the active Product catalog, using **classical
+NLP only** — Indonesian stemming + string similarity, **deliberately not
+an LLM** (see "What this is not", below).
 
 - **Above the confidence threshold** — today's flow proceeds completely
   unchanged: Q2 is asked as normal, and the matched product's name is
@@ -1203,7 +1389,10 @@ solved problem.
 
 ```
 app/
-  config/questions.json       qualifying-question script (NFR-005)
+  config/questions.json       qualifying-question script (NFR-005); questions[0].text is now
+                               specifically the FR-1005 empty-catalog fallback for Q1, plus optional
+                               q1ListIntro/q1ListInstruction wrapping the live numbered product list
+                               (FR-1001/FR-1006)
   config/products.json        Product catalog seed + matchThreshold/intentDenylist tuning knobs --
                                the "products" array is seed-only after first boot (FR-702); the
                                database (see src/services/productsRepo.js) is the live catalog now
@@ -1215,8 +1404,14 @@ app/
       schema.sql               Lead + FailedEvent + app_settings + products schema (+ FailedEvent.channel
                                 for FR-305; + app_settings single-row table for the auto-reply toggle;
                                 + leads.matched_product/needs_review for fuzzy product matching; +
-                                products table -- name/aliases(JSON)/is_active -- for FR-702)
-      index.js                 DB factory (createDb) — used by server.js and tests alike
+                                products table -- name/aliases(JSON)/is_active -- for FR-702; +
+                                leads.shown_product_ids (JSON array of product ids) -- HIGH-severity
+                                post-review fix for FR-1001..FR-1006, see stateMachine.js below)
+      index.js                 DB factory (createDb) — used by server.js and tests alike; also
+                                ensureLeadsColumns() -- ALTER TABLE-adds any leads column introduced
+                                after the original CREATE TABLE (matched_product_score,
+                                additional_notes, shown_product_ids) so an existing data/leads.db
+                                file picks them up too, not just a fresh install
       migrate.js                standalone `npm run migrate` script
     lib/
       humanizedTiming.js        FR-601..FR-604: standalone, transport-agnostic humanized-timing
@@ -1224,7 +1419,17 @@ app/
                                  refresh) -- zero WhatsApp-specific imports, reusable by future
                                  projects (Decision 002)
     services/
-      stateMachine.js          T-005: qualifying-question state machine (core business logic, UNCHANGED)
+      stateMachine.js          T-005: qualifying-question state machine (core business logic; still a
+                                pure function with no DB access -- now also builds Q1's numbered
+                                product list (buildQ1Message) and resolves a numbered reply to it
+                                (parseNumberSelection) when the caller passes activeProducts,
+                                FR-1001..FR-1006; every pre-existing caller/test that omits
+                                activeProducts keeps the original free-text Q1 behavior unmodified.
+                                HIGH-severity post-review fix: a numbered reply is resolved against
+                                existingLead.shown_product_ids (a persisted snapshot the caller
+                                writes via leadsRepo.updateShownProductIds()), never a fresh
+                                activeProducts re-query -- see the module's own header comment,
+                                judgment call 4, for the misrouting bug this prevents)
       inboundMessageProcessor.js  FR-302: shared processInboundMessage() -- the one place both
                                    connectors call into the state machine/Lead repo from (now also
                                    reads settingsRepo fresh on every call to gate the send loop --
@@ -1234,7 +1439,16 @@ app/
                                    moment it's accepted, suppressing that turn's Q2 prompt and
                                    flagging needs_review below threshold -- FR-502..FR-504; catalog is
                                    now read fresh from productsRepo.listActive() per message when a
-                                   productsRepo is injected -- FR-702)
+                                   productsRepo is injected -- FR-702; catalog is now read BEFORE
+                                   calling decideNextAction() too, so the state machine has it for
+                                   Q1's numbered list; a Q1 answer resolved to an exact numbered
+                                   selection skips the fuzzy matcher entirely and records score=1.0 --
+                                   FR-1001..FR-1006; persists decision.shownProductIdsToPersist via
+                                   leadsRepo.updateShownProductIds() whenever Q1's list is (re)sent;
+                                   a numbered reply resolved to a now-deactivated product
+                                   (decision.numberedProductStale) is treated like FR-504's no-match
+                                   branch (needs_review=true, Q2 suppressed), never a confident wrong
+                                   match -- HIGH-severity post-review fix)
       productMatcher.js          FR-502..FR-504: the fuzzy-matching algorithm itself (Indonesian
                                   stemming via sastrawijs + Jaro-Winkler token similarity via
                                   natural) -- pure function, no DB/network access, fully documented
@@ -1259,7 +1473,12 @@ app/
       leadsRepo.js               Lead table data access (now also updateProductMatch() for
                                   FR-503/FR-504 -- a narrowly-scoped UPDATE, separate from
                                   saveAnswers(), so it can't clobber question1/2_answer or
-                                  fallback/retry state)
+                                  fallback/retry state; now also updateShownProductIds(), same
+                                  narrowly-scoped-UPDATE pattern, for the shown_product_ids
+                                  snapshot -- HIGH-severity post-review fix, FR-1001..FR-1006;
+                                  every returned row now goes through a toDomain() that parses
+                                  shown_product_ids from JSON text into a real array/null, same
+                                  pattern productsRepo.js already uses for `aliases`)
       failedEventsRepo.js        FailedEvent table data access (+ channel param, for FR-305)
       settingsRepo.js            app_settings table data access (auto-reply toggle change)
     routes/

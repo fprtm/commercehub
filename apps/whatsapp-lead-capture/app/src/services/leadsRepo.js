@@ -79,6 +79,33 @@ function createLeadsRepo(db) {
         updated_at = @updated_at
     WHERE id = @id
   `);
+  // docs/sdd/changes/2026-09-02-numbered-product-selection.md, HIGH-severity
+  // post-review fix: a separate, narrowly-scoped UPDATE (same pattern as
+  // updateProductMatch above) so it can be called independently, right
+  // after create()/saveAnswers(), without touching anything else on the row.
+  const updateShownProductIdsStmt = db.prepare(`
+    UPDATE leads SET shown_product_ids = @shown_product_ids, updated_at = @updated_at WHERE id = @id
+  `);
+
+  /**
+   * Row (DB shape, `shown_product_ids` still JSON text or NULL) -> domain
+   * object (`shown_product_ids` parsed into a real array, or `null`).
+   * Mirrors productsRepo.js's own toDomain()/`aliases` handling -- same
+   * "callers never have to think about the JSON encoding" reasoning.
+   */
+  function toDomain(row) {
+    if (!row) return row;
+    let shownProductIds = null;
+    if (typeof row.shown_product_ids === 'string' && row.shown_product_ids.length > 0) {
+      try {
+        const parsed = JSON.parse(row.shown_product_ids);
+        if (Array.isArray(parsed)) shownProductIds = parsed;
+      } catch {
+        shownProductIds = null;
+      }
+    }
+    return { ...row, shown_product_ids: shownProductIds };
+  }
 
   return {
     /**
@@ -92,15 +119,15 @@ function createLeadsRepo(db) {
      * machine (see stateMachine.js header comment for detail).
      */
     findByPhone(phoneNumber) {
-      return findByPhone.get(phoneNumber);
+      return toDomain(findByPhone.get(phoneNumber));
     },
 
     findById(id) {
-      return findById.get(id);
+      return toDomain(findById.get(id));
     },
 
     listAllMostRecentFirst() {
-      return listAll.all();
+      return listAll.all().map(toDomain);
     },
 
     create({ phoneNumber, firstMessageAt }) {
@@ -115,7 +142,7 @@ function createLeadsRepo(db) {
         retry_count: 0,
         created_at: now,
       });
-      return findById.get(info.lastInsertRowid);
+      return toDomain(findById.get(info.lastInsertRowid));
     },
 
     saveAnswers(id, { question1Answer, question2Answer, fallbackTriggered, retryCount }) {
@@ -130,7 +157,30 @@ function createLeadsRepo(db) {
         retry_count: retryCount || 0,
         updated_at: new Date().toISOString(),
       });
-      return findById.get(id);
+      return toDomain(findById.get(id));
+    },
+
+    /**
+     * docs/sdd/changes/2026-09-02-numbered-product-selection.md,
+     * HIGH-severity post-review fix: persists the exact ordered list of
+     * `products.id` values Q1's numbered list just showed this Lead (or
+     * clears it, if `productIds` is null/not an array) -- see
+     * schema.sql's doc comment on `shown_product_ids` for the full
+     * reasoning. Called from inboundMessageProcessor.js right after
+     * create()/saveAnswers(), whenever stateMachine.js's decideNextAction()
+     * returns a `shownProductIdsToPersist` (START_FLOW, or a RETRY that
+     * re-shows Q1's list).
+     *
+     * @param {number} id
+     * @param {number[]|null} productIds
+     */
+    updateShownProductIds(id, productIds) {
+      updateShownProductIdsStmt.run({
+        id,
+        shown_product_ids: Array.isArray(productIds) ? JSON.stringify(productIds) : null,
+        updated_at: new Date().toISOString(),
+      });
+      return toDomain(findById.get(id));
     },
 
     /**
@@ -156,7 +206,7 @@ function createLeadsRepo(db) {
         needs_review: needsReview ? 1 : 0,
         updated_at: new Date().toISOString(),
       });
-      return findById.get(id);
+      return toDomain(findById.get(id));
     },
 
     /**
@@ -180,7 +230,7 @@ function createLeadsRepo(db) {
     appendAdditionalNote(id, noteLine, { needsReview = true } = {}) {
       const stmt = needsReview ? appendAdditionalNoteAndFlag : appendAdditionalNoteOnly;
       stmt.run({ id, note_line: noteLine, updated_at: new Date().toISOString() });
-      return findById.get(id);
+      return toDomain(findById.get(id));
     },
 
     /**
@@ -212,7 +262,7 @@ function createLeadsRepo(db) {
         throw err;
       }
       updateStatus.run({ id, status, updated_at: new Date().toISOString() });
-      return findById.get(id);
+      return toDomain(findById.get(id));
     },
   };
 }

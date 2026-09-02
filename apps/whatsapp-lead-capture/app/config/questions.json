@@ -13,5 +13,7 @@
   ],
   "fallbackMessage": "Thanks for your message — a team member will follow up with you shortly.",
   "completionMessage": "Thanks! We've got what we need — a team member will follow up with you shortly.",
-  "retryPrefix": "Sorry, I didn't quite catch that. "
+  "retryPrefix": "Sorry, I didn't quite catch that. ",
+  "q1ListIntro": "Ada beberapa pilihan nih kak:",
+  "q1ListInstruction": "Balas nomornya ya, atau ketik aja nama produknya kalau udah tau"
 }

@@ -50,6 +50,29 @@ CREATE TABLE IF NOT EXISTS leads (
   -- unbounded/untrimmed (out of scope to bound, per the change doc, given
   -- this project's demo scale).
   additional_notes TEXT,
+  -- Added post-review (HIGH-severity finding) for
+  -- docs/sdd/changes/2026-09-02-numbered-product-selection.md (FR-1001/
+  -- FR-1002/FR-1004). JSON-encoded array of `products.id` values, in the
+  -- exact order they were numbered when Q1's list was last (re)sent to
+  -- this Lead (src/services/stateMachine.js's buildQ1Message()) -- NULL
+  -- when Q1 was never shown as a numbered list at all (FR-1005 fallback,
+  -- or a pre-existing Lead from before this column existed).
+  --
+  -- This is a SNAPSHOT, not a cache: a numbered reply ("3") MUST be
+  -- resolved against exactly what this specific customer was actually
+  -- shown, never against a fresh `productsRepo.listActive()` re-query at
+  -- answer-time. Re-querying fresh would let a catalog change in the
+  -- window between Q1-send and the reply (e.g. the owner deactivating a
+  -- DIFFERENT product than the one this customer picked) silently shift
+  -- which product a given position now refers to -- a confident,
+  -- needs_review=false match to the WRONG product, reopening the exact
+  -- misrouting shape FR-901 already fixed once for the fuzzy matcher,
+  -- through a different mechanism. See src/services/stateMachine.js's
+  -- decideNextAction() for where this is written (on START_FLOW and on a
+  -- Q1 RETRY, which re-shows the list and so re-snapshots it) and read
+  -- back (to resolve a numbered reply, then re-verify that specific
+  -- product is STILL active right now before confidently matching it).
+  shown_product_ids TEXT,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
