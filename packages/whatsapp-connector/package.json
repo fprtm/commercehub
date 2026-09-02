@@ -1,0 +1,23 @@
+{
+  "name": "@rimba/whatsapp-connector",
+  "version": "1.0.0",
+  "description": "Dual-mode WhatsApp connectivity (official Cloud API + Baileys) exposing a uniform sendTextMessage/markAsRead/sendTypingIndicator outbound contract, plus Baileys-specific connection lifecycle and pairing status/QR hooks.",
+  "private": true,
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4"
+  },
+  "allowScripts": {
+    "@whiskeysockets/baileys@7.0.0-rc14": true,
+    "protobufjs@7.6.6": true
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

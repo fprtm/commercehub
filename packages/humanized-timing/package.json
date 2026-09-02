@@ -1,0 +1,14 @@
+{
+  "name": "@rimba/humanized-timing",
+  "version": "1.0.0",
+  "description": "Transport-agnostic timing orchestration for human-paced automated messaging replies (mark-read, typing indicator, length-proportional delay, send). Zero transport-specific imports -- copyable wholesale into any project.",
+  "private": true,
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
