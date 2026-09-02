@@ -371,3 +371,61 @@ test('T-006 POST /webhook: a valid X-Hub-Signature-256 is accepted when an app s
     await ctx.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// docs/sdd/changes/2026-09-03-credentials-in-db.md, post-review security fix:
+// a real cloud_api deployment (src/server.js, appSecretRequired: true) must
+// never process an unverified webhook just because the owner hasn't
+// finished configuring credentials yet. These tests exercise that flag
+// directly since none of the pre-existing tests above opt into it.
+// ---------------------------------------------------------------------------
+
+test('appSecretRequired + no app secret configured: POST /webhook is rejected (503), no lead created, nothing sent', async () => {
+  const ctx = await startTestServer({ appSecretRequired: true }); // appSecret left unset
+  try {
+    const res = await fetch(`${ctx.baseUrl}/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messagePayload('6286666666666', 'hi')),
+    });
+    assert.equal(res.status, 503);
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) as c FROM leads').get().c, 0, 'must not process an unverifiable event');
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) as c FROM failed_events').get().c, 0, 'this is a config-not-ready rejection, not a processing failure to log');
+    assert.deepEqual(ctx.metaClient.sentMessages, []);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('appSecretRequired + a real app secret IS configured: normal signature verification applies, valid signature still works', async () => {
+  const secret = 'real-secret';
+  const ctx = await startTestServer({ appSecretRequired: true, appSecret: secret });
+  try {
+    const body = JSON.stringify(messagePayload('6287777777777', 'hi'));
+    const signature = `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
+    const res = await fetch(`${ctx.baseUrl}/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': signature },
+      body,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) as c FROM leads').get().c, 1);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('appSecretRequired defaults to false/off: every pre-existing test above (unset appSecret, no flag) is unaffected -- explicit regression guard', async () => {
+  const ctx = await startTestServer(); // no appSecretRequired override at all
+  try {
+    const res = await fetch(`${ctx.baseUrl}/webhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(messagePayload('6288888888888', 'hi')),
+    });
+    assert.equal(res.status, 200, 'unset appSecretRequired must keep the original skip-verification-when-unset behavior');
+    assert.equal(ctx.db.prepare('SELECT COUNT(*) as c FROM leads').get().c, 1);
+  } finally {
+    await ctx.close();
+  }
+});

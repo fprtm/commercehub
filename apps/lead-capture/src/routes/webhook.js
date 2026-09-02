@@ -34,12 +34,26 @@ function toIsoTimestamp(unixSecondsString) {
  *   - FR-402 (docs/sdd/changes/2026-09-01-auto-reply-toggle.md), forwarded
  *   straight into the shared inboundMessageProcessor.js.
  * @param {string} deps.verifyToken - WHATSAPP_VERIFY_TOKEN
- * @param {string|undefined} deps.appSecret - WHATSAPP_APP_SECRET. The real
- *   entrypoint (src/server.js) now refuses to boot without this set
- *   (it's in REQUIRED_ENV_VARS), so in a deployed build signature
- *   verification is never optional. It remains an injectable dependency
- *   here (rather than hardcoded) so the createApp() factory can still be
- *   used directly by tests without needing a real secret.
+ * @param {string|undefined} deps.appSecret - the WhatsApp Cloud API app
+ *   secret, read by src/server.js from `settingsRepo.getWhatsappCloudApiCredentials()`
+ *   (docs/sdd/changes/2026-09-03-credentials-in-db.md -- moved out of the
+ *   env var this app previously required at boot). May now legitimately be
+ *   unset until the owner configures it via GET/POST /settings/credentials.
+ *   It remains an injectable dependency here (rather than hardcoded) so the
+ *   createApp() factory can still be used directly by tests without
+ *   needing a real secret.
+ * @param {boolean} [deps.appSecretRequired] - post-review fix (same change
+ *   doc as above): defaults to `false`/undefined, meaning "appSecret unset
+ *   -> skip verification", which is what every test in this suite relies on
+ *   to POST unsigned payloads without needing to compute an HMAC per test,
+ *   and what WHATSAPP_MODE=baileys legitimately needs (no Meta integration
+ *   exists in that mode at all). src/server.js is the ONLY caller that ever
+ *   passes `true`, and only when WHATSAPP_MODE==='cloud_api' -- restoring,
+ *   at request time instead of boot time, the guarantee that a REAL
+ *   cloud_api deployment can never silently accept unverified webhook
+ *   events just because the owner hasn't finished configuring credentials
+ *   yet. When true and appSecret is still unset, every POST /webhook is
+ *   rejected outright (503) before any processing is attempted.
  * @param {(ms: number) => Promise<unknown>} [deps.sleep] - FR-601/NFR-603
  *   (docs/sdd/changes/2026-09-01-humanized-timing-module.md): forwarded
  *   straight into inboundMessageProcessor.js's humanized-timing wiring.
@@ -70,6 +84,7 @@ function createWebhookRouter(deps) {
     questionsConfig,
     verifyToken,
     appSecret,
+    appSecretRequired = false,
     settingsRepo,
     sleep,
     random,
@@ -136,6 +151,24 @@ function createWebhookRouter(deps) {
     '/webhook',
     express.json({ verify: captureRawBody, limit: '1mb' }),
     async (req, res, next) => {
+      // docs/sdd/changes/2026-09-03-credentials-in-db.md, post-review fix:
+      // cloud_api mode used to hard-require appSecret at boot (process
+      // never started without it), which made "appSecret unset" impossible
+      // to reach in a real cloud_api deployment. Now that it's DB-sourced
+      // and optional-until-configured, that guarantee moved here instead --
+      // src/server.js sets appSecretRequired=true only in real cloud_api
+      // boots (never in tests, never in baileys mode, where this route
+      // legitimately has no Meta integration to verify against at all).
+      // TD-004's "always 200" is deliberately NOT applied here: that rule
+      // exists so a genuine Meta retry doesn't loop forever on a processing
+      // failure -- this isn't Meta traffic being processed, it's the
+      // endpoint refusing to accept unverifiable events at all while
+      // unconfigured, so failing loudly (503) is correct, not a regression
+      // of TD-004's intent.
+      if (appSecretRequired && !appSecret) {
+        log('webhook_rejected_not_configured', {});
+        return res.status(503).json({ status: 'not_configured' });
+      }
       try {
         if (appSecret) {
           const signatureHeader = req.headers['x-hub-signature-256'];

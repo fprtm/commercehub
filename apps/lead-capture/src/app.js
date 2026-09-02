@@ -29,6 +29,11 @@ const { createProductsRepo } = require('./services/productsRepo');
  * @param {object} deps.questionsConfig
  * @param {string} deps.verifyToken
  * @param {string|undefined} deps.appSecret
+ * @param {boolean} [deps.appSecretRequired] - forwarded straight into
+ *   createWebhookRouter() (docs/sdd/changes/2026-09-03-credentials-in-db.md)
+ *   -- see that file's doc comment. Left undefined by default so every
+ *   pre-existing test (which never passes it) keeps exercising the original
+ *   "unset appSecret means skip verification" behavior unmodified.
  * @param {string} deps.sessionSecret
  * @param {string} deps.ownerUsername
  * @param {string} deps.ownerPassword
@@ -78,6 +83,7 @@ function createApp(deps) {
     questionsConfig,
     verifyToken,
     appSecret,
+    appSecretRequired,
     sessionSecret,
     ownerUsername,
     ownerPassword,
@@ -141,6 +147,7 @@ function createApp(deps) {
       questionsConfig,
       verifyToken,
       appSecret,
+      appSecretRequired,
       settingsRepo,
       sleep,
       random,

@@ -78,6 +78,12 @@ async function startTestServer(overrides = {}) {
     questionsConfig: overrides.questionsConfig || TEST_CONFIG,
     verifyToken: overrides.verifyToken || 'test-verify-token',
     appSecret: overrides.appSecret, // undefined by default -> signature check skipped
+    // docs/sdd/changes/2026-09-03-credentials-in-db.md post-review fix:
+    // undefined by default, same as every other override here -- only a
+    // test that explicitly opts in exercises the "reject unconfigured
+    // cloud_api webhook" behavior; every pre-existing test keeps relying on
+    // unset appSecret meaning "skip verification", unmodified.
+    appSecretRequired: overrides.appSecretRequired,
     sessionSecret: 'test-session-secret',
     ownerUsername: overrides.ownerUsername || 'owner',
     ownerPassword: overrides.ownerPassword || 'secret-password',

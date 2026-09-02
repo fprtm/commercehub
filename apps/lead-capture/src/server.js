@@ -297,6 +297,15 @@ function main() {
     questionsConfig,
     verifyToken: waCreds.verifyToken,
     appSecret: waCreds.appSecret,
+    // Post-review fix (docs/sdd/changes/2026-09-03-credentials-in-db.md):
+    // restores, at request time, the guarantee boot-time env validation
+    // used to give -- a real cloud_api deployment can never silently accept
+    // an unverified POST /webhook, even while the owner hasn't finished
+    // configuring credentials via /settings/credentials yet. Only ever
+    // true here (the real entrypoint); never set by tests or by the
+    // WHATSAPP_MODE=baileys branch, where this route has no Meta
+    // integration to verify against at all.
+    appSecretRequired: WHATSAPP_MODE === 'cloud_api',
     sessionSecret: process.env.SESSION_SECRET,
     ownerUsername: process.env.OWNER_USERNAME,
     ownerPassword: process.env.OWNER_PASSWORD,
