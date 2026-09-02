@@ -13,7 +13,11 @@
 ## Reports (`reports/`)
 - `2026-09-02-reconnect-throttle-review.md` — independent review, PASS.
 - `2026-09-02-telegram-multichannel-review.md` — independent review of 002-telegram-multichannel, PASS.
+- `2026-09-03-baileys-contactid-and-failed-events-migration-fix.md` — post-review fix: Baileys `contactId` contract drift (silent channel breakage) + `failed_events.channel` migration gap, both found by independent adversarial review. PASS, HIGH confidence.
 
 ## Other
 - `glossary.md` — domain terms (Channel, Connector).
-- `traceability.md` — global TICKET-xxx ID registry.
+- `traceability.md` — global TICKET-xxx ID registry + FSD/SEC spine coverage.
+
+## Recent Activity
+- [2026-09-03] Task: baileys-contactid-and-failed-events-migration-fix — 2 bugs fixed, 14 traceability problems resolved → [report](reports/2026-09-03-baileys-contactid-and-failed-events-migration-fix.md)

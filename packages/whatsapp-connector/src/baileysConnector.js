@@ -475,7 +475,7 @@ function createBaileysConnector({
       try {
         // eslint-disable-next-line no-await-in-loop -- process sequentially, same as webhook.js
         await processInboundMessage({
-          phoneNumber,
+          contactId: phoneNumber,
           messageBody,
           messageType,
           timestamp,

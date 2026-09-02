@@ -1,7 +1,7 @@
 # TICKET-1306 — Dashboard channel badge + filter
 
 **Feature**: 002-telegram-multichannel
-**Refs**: FSD Flow 3 (FR-1305), ux.md
+**Refs**: FSD-002 Flow 3 (FR-1305), ux.md
 **Tier**: T2
 **Status**: ✅ done — implemented `listAllMostRecentFirst({ channel })` (leadsRepo.js), the `/leads` route now reads `req.query.channel` and pre-selects it in the rendered `<select>`, `leads.ejs` renamed the "Phone number" header to "Contact", added a "Channel" column with `.badge-channel-whatsapp`/`.badge-channel-telegram` badges, and added a GET-submitted channel filter `<select>` above the table (reuses the existing empty-state block for zero-result filters). Verified via `npx turbo run test`: 303 passed / 0 failed (up from the 299 baseline: 4 new tests — a `listAllMostRecentFirst({channel})` unit test confirming the no-arg call is unchanged, plus 3 route-level tests for the filtered/unfiltered/empty-state render paths). No existing test was modified.
 **Dependencies**: TICKET-1302

@@ -51,6 +51,7 @@ function createDb(dbPath) {
   // "no caching / always current" spirit as productsRepo/settingsRepo
   // elsewhere in this codebase).
   ensureLeadsColumns(db);
+  ensureFailedEventsColumns(db);
 
   return db;
 }
@@ -107,6 +108,23 @@ function ensureLeadsColumns(db) {
   // comment above CREATE INDEX idx_leads_first_message_at for why this
   // can't live in the static schema.sql exec instead.
   db.exec('CREATE INDEX IF NOT EXISTS idx_leads_contact_id ON leads(contact_id)');
+}
+
+/**
+ * Adds `failed_events` columns introduced after the original CREATE TABLE
+ * if this is an existing DB file that predates them -- same rationale as
+ * ensureLeadsColumns(db) above, applied to the other table that gained a
+ * column (`channel`, FR-305) after its original CREATE TABLE shipped.
+ * failedEventsRepo.record() always binds a `channel` value on every
+ * INSERT, so without this an operator upgrading a real pre-existing
+ * data/leads.db would get "no column named channel" on every recorded
+ * failure -- silently losing FailedEvent rows instead of just leads.
+ */
+function ensureFailedEventsColumns(db) {
+  const existingColumns = new Set(db.prepare('PRAGMA table_info(failed_events)').all().map((col) => col.name));
+  if (!existingColumns.has('channel')) {
+    db.exec("ALTER TABLE failed_events ADD COLUMN channel TEXT NOT NULL DEFAULT 'whatsapp_cloud_api'");
+  }
 }
 
 module.exports = { createDb };

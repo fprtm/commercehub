@@ -347,13 +347,13 @@ test('FR-302: messages.upsert extracts the phone number from the JID and calls t
   });
 
   assert.equal(calls.length, 2);
-  assert.equal(calls[0].phoneNumber, '6281234567890');
+  assert.equal(calls[0].contactId, '6281234567890');
   assert.equal(calls[0].messageBody, 'halo, baju ini masih ada?');
   assert.equal(calls[0].messageType, 'text');
   assert.equal(calls[0].channel, 'whatsapp_baileys');
   assert.equal(calls[0].timestamp, new Date(1735689600 * 1000).toISOString());
 
-  assert.equal(calls[1].phoneNumber, '6289999999999');
+  assert.equal(calls[1].contactId, '6289999999999');
   assert.equal(calls[1].messageBody, null);
   assert.equal(calls[1].messageType, 'stickerMessage');
 });

@@ -1,7 +1,7 @@
 # TICKET-1302 — Schema migration (`contact_id` + `channel`) + repo/processor rename
 
 **Feature**: 002-telegram-multichannel
-**Refs**: FSD (Flow 1, Edge case: contact_id/channel collision), ERD (full doc), FR-1306, FR-1307
+**Refs**: FSD-002 (Flow 1, Edge case: contact_id/channel collision), ERD-002 (full doc), FR-1306, FR-1307
 **Tier**: T1
 **Status**: ✅ done
 **Dependencies**: none

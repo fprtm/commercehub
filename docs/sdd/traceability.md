@@ -1,6 +1,6 @@
 # Traceability — Global Ticket ID Counter
 
-Started with feature 002 — feature 001's tickets (TICKET-1101–1109) predate this file and are not backfilled here (see `specs/001-monorepo-migration/tickets/tickets.md`, which itself predates the current per-ticket-file convention).
+Started with feature 002 — feature 001's tickets (numbered 1101 through 1109, predating the TICKET-NNNN per-ticket-file convention) predate this file and are not backfilled here (see `specs/001-monorepo-migration/tickets/tickets.md`, which itself predates that convention).
 
 | Ticket | Feature | Title |
 |---|---|---|
@@ -12,4 +12,16 @@ Started with feature 002 — feature 001's tickets (TICKET-1101–1109) predate 
 | TICKET-1306 | 002-telegram-multichannel | Dashboard channel badge + filter |
 | TICKET-1307 | 002-telegram-multichannel | Full re-verify + migration report |
 
-Next available ID: **TICKET-1401**.
+## Spine coverage (FSD / SEC)
+
+| Spine ID | Defined in | Traced to |
+|---|---|---|
+| FSD-002 | specs/002-telegram-multichannel/fsd.md | TICKET-1303 (Flow 1 transport), TICKET-1305 (Flow 2 media), TICKET-1306 (Flow 3 dashboard) |
+| SEC-1301 | specs/002-telegram-multichannel/threats.md | TICKET-1303 (`.env`-only token, never logged) |
+| SEC-1302 | specs/002-telegram-multichannel/threats.md | TICKET-1307 (confirmed existing `extract-app.js` `.env` exclusion still applies, no Telegram-specific change needed) |
+| SEC-1303 | specs/002-telegram-multichannel/threats.md | TICKET-1303 (defensive `Update` normalization in the connector) |
+| SEC-1304 | specs/002-telegram-multichannel/threats.md | TICKET-1304 (shared inboundMessageProcessor already treats inbound text as untrusted; accepted, no new handling) |
+| SEC-1305 | specs/002-telegram-multichannel/threats.md | TICKET-1305 (stores `file_id` reference only, never downloads bytes) |
+| SEC-1306 | specs/002-telegram-multichannel/threats.md | TICKET-1304 (accepted risk, same class as WA, per Decision 001) |
+
+Next free ticket ID: **TICKET-1401**.

@@ -1,7 +1,7 @@
 # TICKET-1301 — Rename app: `whatsapp-lead-capture` → `lead-capture`
 
 **Feature**: 002-telegram-multichannel
-**Refs**: SDS §"App rename (FR-1301)"
+**Refs**: SDS-002 §"App rename (FR-1301)", ADR-001 (Telegram scoped into the existing app — the rename this ticket does is a direct consequence of that decision)
 **Tier**: T3
 **Status**: ✅ done
 
