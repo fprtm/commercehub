@@ -1,3 +1,9 @@
+---
+description: Ramp send delay back up gradually after a Baileys reconnect, to reduce WhatsApp ban/restriction risk from reconnect-churn
+status: done
+updated: 2026-09-02
+---
+
 # Change: Reconnect Throttle for Baileys (Anti-Detection Mitigation)
 
 **Status:** APPROVED (real-world trigger: a test WhatsApp number was temporarily restricted by WhatsApp's spam detection after repeated rapid connect/disconnect cycles during dev-server testing; research confirmed frequent reconnects are a documented, independent ban-risk factor, separate from message volume)
