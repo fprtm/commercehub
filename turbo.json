@@ -6,6 +6,7 @@
       "outputs": ["dist/**"]
     },
     "test": {
+      "dependsOn": ["^test"],
       "outputs": []
     },
     "dev": {
