@@ -60,7 +60,7 @@ test('FR-901: deactivating "Kaos Rimba Navy" then sending its exact name must NO
   // ACTIVE-ONLY pool alone (Hitam only), "kaos rimba navy ada?" scores
   // above threshold on Hitam's own name (2 of its 3 tokens -- "kaos",
   // "rimba" -- match) -- this is the raw defect the guard must override.
-  const { matchProduct, DEFAULT_MATCH_THRESHOLD } = require('../src/services/productMatcher');
+  const { matchProduct, DEFAULT_MATCH_THRESHOLD } = require('@rimba/product-matcher');
   const activeOnlyResult = matchProduct('kaos rimba navy ada?', productsRepo.listActive());
   assert.ok(
     activeOnlyResult.matched && activeOnlyResult.product.name === 'Kaos Rimba Hitam',

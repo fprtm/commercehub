@@ -2,8 +2,8 @@
 
 const { decideNextAction, ACTIONS, hasUsableText } = require('./stateMachine');
 const { log } = require('../utils/logger');
-const { sendWithHumanizedTiming } = require('../lib/humanizedTiming');
-const { matchProduct } = require('./productMatcher');
+const { sendWithHumanizedTiming } = require('@rimba/humanized-timing');
+const { matchProduct } = require('@rimba/product-matcher');
 
 /**
  * FR-901 (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md, Bug 1,

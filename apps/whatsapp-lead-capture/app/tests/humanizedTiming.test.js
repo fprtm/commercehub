@@ -11,7 +11,7 @@ const {
   MIN_TYPING_MS,
   DEFAULT_READ_DELAY_RANGE_MS,
   DEFAULT_TYPING_REFRESH_INTERVAL_MS,
-} = require('../src/lib/humanizedTiming');
+} = require('@rimba/humanized-timing');
 
 /**
  * FR-602/NFR-602: this whole file only requires

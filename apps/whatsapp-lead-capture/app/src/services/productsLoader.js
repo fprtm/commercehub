@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { DEFAULT_INTENT_DENYLIST } = require('./productMatcher');
+const { DEFAULT_INTENT_DENYLIST } = require('@rimba/product-matcher');
 const { log } = require('../utils/logger');
 
 const DEFAULT_CONFIG_PATH = path.join(__dirname, '..', '..', 'config', 'products.json');

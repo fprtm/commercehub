@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const { loadProductsConfig, DEFAULT_CONFIG_PATH } = require('../src/services/productsLoader');
-const { DEFAULT_INTENT_DENYLIST } = require('../src/services/productMatcher');
+const { DEFAULT_INTENT_DENYLIST } = require('@rimba/product-matcher');
 
 /**
  * Captures every console.log call made during `fn()` and returns them

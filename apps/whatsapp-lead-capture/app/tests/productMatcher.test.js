@@ -10,7 +10,7 @@ const {
   DEFAULT_MATCH_THRESHOLD,
   DEFAULT_INTENT_DENYLIST,
   DENYLIST_FUZZY_MATCH_THRESHOLD,
-} = require('../src/services/productMatcher');
+} = require('@rimba/product-matcher');
 const natural = require('natural');
 
 /**

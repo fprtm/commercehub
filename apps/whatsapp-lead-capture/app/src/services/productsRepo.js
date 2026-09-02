@@ -23,7 +23,7 @@
  * every write re-serializes a normalized (trimmed, non-empty) array, so
  * callers never have to think about the JSON encoding at all.
  */
-const { normalizeAndStemToTokens } = require('./productMatcher');
+const { normalizeAndStemToTokens } = require('@rimba/product-matcher');
 const { log } = require('../utils/logger');
 
 function createProductsRepo(db) {

@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 
-const { createBaileysConnector } = require('../src/services/baileysConnector');
+const { createBaileysConnector } = require('@rimba/whatsapp-connector');
 // The real package (already an installed dependency) is used only for its
 // DisconnectReason numeric constants -- requiring it does not open a
 // network connection or touch a real WhatsApp account.

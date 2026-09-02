@@ -66,7 +66,7 @@ const { seedProductsFromJsonIfEmpty, fixBareKaosAliasOnExistingInstalls } = requ
 const { loadProductsConfig } = require('../src/services/productsLoader');
 const { loadQuestionsConfig } = require('../src/services/questionsLoader');
 const { createInboundMessageProcessor } = require('../src/services/inboundMessageProcessor');
-const { matchProduct } = require('../src/services/productMatcher');
+const { matchProduct } = require('@rimba/product-matcher');
 
 function line(char = '=', len = 100) {
   return char.repeat(len);

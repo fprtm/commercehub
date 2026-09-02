@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createMetaClient } = require('../src/services/metaClient');
+const { createMetaClient } = require('@rimba/whatsapp-connector');
 
 /**
  * FR-601/FR-604 (docs/sdd/changes/2026-09-01-humanized-timing-module.md):

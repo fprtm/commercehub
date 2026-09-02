@@ -5,8 +5,7 @@ const path = require('path');
 
 const { createApp } = require('./app');
 const { createDb } = require('./db');
-const { createMetaClient } = require('./services/metaClient');
-const { createBaileysConnector } = require('./services/baileysConnector');
+const { createMetaClient, createBaileysConnector } = require('@rimba/whatsapp-connector');
 const { createInboundMessageProcessor } = require('./services/inboundMessageProcessor');
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
@@ -15,7 +14,7 @@ const { createProductsRepo } = require('./services/productsRepo');
 const { seedProductsFromJsonIfEmpty, fixBareKaosAliasOnExistingInstalls } = require('./services/productsSeed');
 const { loadQuestionsConfig } = require('./services/questionsLoader');
 const { loadProductsConfig } = require('./services/productsLoader');
-const { DEFAULT_MATCH_THRESHOLD } = require('./services/productMatcher');
+const { DEFAULT_MATCH_THRESHOLD } = require('@rimba/product-matcher');
 const { log } = require('./utils/logger');
 
 // FR-501..FR-504 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
