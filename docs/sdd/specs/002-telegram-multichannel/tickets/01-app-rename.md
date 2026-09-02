@@ -3,7 +3,9 @@
 **Feature**: 002-telegram-multichannel
 **Refs**: SDS §"App rename (FR-1301)"
 **Tier**: T3
-**Status**: ⬜ todo
+**Status**: ✅ done
+
+Verified: `npm install && npx turbo run test` → 199/199 pass (0 fail), identical to pre-rename baseline. `git diff --cached --summary` shows every moved file (including `package.json`) as a 100%-similarity rename with 0 insertions/deletions. `git log --follow -- apps/whatsapp-lead-capture/src/services/leadsRepo.js` (queried pre-commit, since the working tree is intentionally left uncommitted) returns the full 6-commit pre-rename history back to the initial commit, confirming `git log --follow` against the new path will show identical history once committed.
 **Dependencies**: none
 **Files likely touched:** `apps/whatsapp-lead-capture/**` (moved to `apps/lead-capture/**`), `package.json` (root), `apps/lead-capture/package.json`, `scripts/extract-app.js`
 **Claimed by:** _(empty)_

@@ -1,0 +1,14 @@
+{
+  "name": "@rimba/telegram-connector",
+  "version": "1.0.0",
+  "description": "Raw-HTTPS, long-polling Telegram Bot API connectivity -- zero SDK dependency, mirroring @rimba/whatsapp-connector's metaClient.js pattern.",
+  "private": true,
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

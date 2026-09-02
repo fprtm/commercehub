@@ -5,7 +5,7 @@
   "description": "Turborepo monorepo for Rimba client-delivery apps and shared packages.",
   "packageManager": "npm@11.17.0",
   "workspaces": [
-    "apps/whatsapp-lead-capture",
+    "apps/lead-capture",
     "packages/*"
   ],
   "scripts": {

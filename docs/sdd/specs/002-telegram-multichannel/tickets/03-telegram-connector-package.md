@@ -3,7 +3,7 @@
 **Feature**: 002-telegram-multichannel
 **Refs**: SDS §"@rimba/telegram-connector (new package)", threats.md SEC-1301/SEC-1303
 **Tier**: T1
-**Status**: ⬜ todo
+**Status**: ✅ done — `packages/telegram-connector/` built (package.json, src/telegramConnector.js, src/logger.js, src/index.js, test/telegramConnector.test.js, README.md). `npm test` (and `npx turbo run test --filter=@rimba/telegram-connector` from root): 10/10 passing, 0 failing. Covers all 4 acceptance criteria (text normalization, malformed+valid mixed batch, sendTextMessage/sendTypingIndicator request shape, photo-largest-file_id-no-caption) plus sticker/document normalization, offset advancement, and empty-batch no-op. Verified no log call anywhere contains the bot token substring or the constructed request URL (SEC-1301), and malformed updates are caught, logged (`telegram_malformed_update`), and skipped without throwing out of the poll loop (SEC-1303).
 **Dependencies**: none
 **Files likely touched:** `packages/telegram-connector/package.json` (new), `packages/telegram-connector/src/telegramConnector.js` (new), `packages/telegram-connector/test/telegramConnector.test.js` (new), `packages/telegram-connector/README.md` (new)
 **Claimed by:** _(empty)_

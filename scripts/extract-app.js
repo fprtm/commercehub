@@ -23,7 +23,7 @@
  * needs it to know which env vars to fill in.
  *
  * Usage:
- *   node scripts/extract-app.js whatsapp-lead-capture /tmp/some-output-dir
+ *   node scripts/extract-app.js lead-capture /tmp/some-output-dir
  */
 
 const fs = require('fs');
