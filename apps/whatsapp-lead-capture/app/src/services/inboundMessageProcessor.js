@@ -6,6 +6,58 @@ const { sendWithHumanizedTiming } = require('../lib/humanizedTiming');
 const { matchProduct } = require('./productMatcher');
 
 /**
+ * FR-901 (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md, Bug 1,
+ * safety-critical): matching only ever scores the ACTIVE product pool
+ * (`productsRepo.listActive()`) -- so deactivating a product can silently
+ * misroute a customer to a *different* active product that would have lost
+ * (or tied into ambiguity) had the deactivated product still been in the
+ * running. Concretely: deactivating "Kaos Rimba Navy" and sending its exact
+ * name ("kaos rimba navy ada?") used to score a confident match on "Kaos
+ * Rimba Hitam" against the active-only pool (2 of Hitam's 3 name tokens --
+ * "kaos", "rimba" -- matched, clearing threshold), even though the message
+ * obviously names Navy, not Hitam.
+ *
+ * The fix: whenever the active-only pool just produced a confident match,
+ * ALSO score the same text against the FULL catalog (active + inactive,
+ * via `productsRepo.listAll()`). If the full catalog's own confident
+ * winner is an inactive product, that's proof the active-only result was
+ * an artifact of the deactivated product's absence, not a genuine best
+ * match -- so the result is forced to no-match/needs_review, regardless of
+ * what the active-only pool computed. Gated on `matchResult.matched` (only
+ * runs the extra full-catalog pass when there's a confident match to
+ * second-guess in the first place) and on `productsRepo` being provided at
+ * all -- the static `products` array path (every pre-existing caller/test)
+ * has no active/inactive concept, so it is left completely untouched
+ * (NFR-901).
+ *
+ * @param {{product: object|null, score: number, matched: boolean, flaggedTerms: string[], ambiguous: boolean}} matchResult
+ * @param {string} text - the same customer text `matchResult` was computed from.
+ * @param {object} params
+ * @param {ReturnType<typeof import('./productsRepo').createProductsRepo>} [params.productsRepo]
+ * @param {number} [params.matchThreshold]
+ * @param {string[]} [params.intentDenylist]
+ * @returns {typeof matchResult}
+ */
+function guardAgainstInactiveFullCatalogWinner(matchResult, text, { productsRepo, matchThreshold, intentDenylist }) {
+  if (!matchResult.matched || !productsRepo) return matchResult;
+
+  const fullCatalog = productsRepo.listAll();
+  const fullCatalogResult = matchProduct(text, fullCatalog, { threshold: matchThreshold, intentDenylist });
+
+  if (fullCatalogResult.matched && fullCatalogResult.product && fullCatalogResult.product.is_active === false) {
+    log('product_match_forced_no_match_inactive_full_catalog_winner', {
+      activePoolWinner: matchResult.product?.name,
+      activePoolScore: matchResult.score,
+      fullCatalogWinner: fullCatalogResult.product.name,
+      fullCatalogScore: fullCatalogResult.score,
+    });
+    return { ...matchResult, product: null, matched: false };
+  }
+
+  return matchResult;
+}
+
+/**
  * The shared inbound-message contract (FR-302 of
  * docs/sdd/changes/2026-09-01-baileys-dual-mode.md).
  *
@@ -194,7 +246,15 @@ function createInboundMessageProcessor({
       // deactivate/edit is reflected on the very next message.
       const catalog = Array.isArray(products) ? products : productsRepo ? productsRepo.listActive() : undefined;
       if (decision.action === ACTIONS.ANSWER_Q1 && lead && Array.isArray(catalog)) {
-        const matchResult = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
+        const rawMatchResult = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
+        // FR-901: never return a confident match that only "wins" because
+        // the actually-best-matching product was deactivated -- see the
+        // guard function's doc comment above.
+        const matchResult = guardAgainstInactiveFullCatalogWinner(rawMatchResult, messageBody, {
+          productsRepo,
+          matchThreshold,
+          intentDenylist,
+        });
         if (matchResult.matched) {
           // FR-503: above threshold, today's flow proceeds completely
           // unchanged (`replies` is left as-is, so Q2 still gets sent) --
@@ -278,7 +338,13 @@ function createInboundMessageProcessor({
         // `currentScore === null` (no confident match recorded yet, at any
         // point) always loses to any confident new match.
         if (Array.isArray(catalog)) {
-          const postCompletionMatch = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
+          const rawPostCompletionMatch = matchProduct(messageBody, catalog, { threshold: matchThreshold, intentDenylist });
+          // FR-901: same inactive-full-catalog-winner guard as the Q1 path above.
+          const postCompletionMatch = guardAgainstInactiveFullCatalogWinner(rawPostCompletionMatch, messageBody, {
+            productsRepo,
+            matchThreshold,
+            intentDenylist,
+          });
           const currentScore = typeof lead.matched_product_score === 'number' ? lead.matched_product_score : null;
           if (postCompletionMatch.matched && (currentScore === null || postCompletionMatch.score > currentScore)) {
             lead = leadsRepo.updateProductMatch(lead.id, {

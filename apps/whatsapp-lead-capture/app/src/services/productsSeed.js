@@ -53,4 +53,66 @@ function seedProductsFromJsonIfEmpty({ productsRepo, products }) {
   return { seeded: true, count: products.length };
 }
 
-module.exports = { seedProductsFromJsonIfEmpty };
+/**
+ * FR-902 data-fix migration (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md,
+ * Bug 2): the original config/products.json shipped a bare "kaos" alias on
+ * "Kaos Rimba Navy" -- a generic single-word alias that made every OTHER
+ * kaos-family product's own full name unmatchable (see productMatcher.js's
+ * ambiguity-margin check and this change doc's Bug 2 section). Removing it
+ * from config/products.json (done as part of this same fix) only affects a
+ * FRESH install's first-boot seed -- per seedProductsFromJsonIfEmpty()'s
+ * own doc comment above, config/products.json's `"products"` array is read
+ * exactly once (the first boot after an empty `products` table) and never
+ * again, so any install that already completed that one-time seed BEFORE
+ * this fix shipped is stuck with the bad alias sitting in its `products`
+ * table row forever, unless something explicitly corrects it.
+ *
+ * Judgment call (documented per the change spec's request): rather than
+ * add a new "have I migrated" flag/column -- this project deliberately
+ * avoids that kind of extra state; see seedProductsFromJsonIfEmpty()'s own
+ * doc comment on why it gates on table emptiness instead of a flag -- this
+ * backfill is gated the same way: it looks for the literal bad state (a
+ * product literally named "Kaos Rimba Navy" that still literally carries a
+ * bare "kaos" alias) and removes only that one alias. That makes it: (a)
+ * a no-op forever once nothing matches (including on every fresh install,
+ * which never has the bad alias to begin with after the JSON fix), (b)
+ * self-healing if an already-fixed install is ever restored from an old
+ * backup, and (c) safe to call unconditionally on every boot, same as
+ * seedProductsFromJsonIfEmpty() above. It deliberately touches ONLY that
+ * one exact alias string on that one exact product -- every other alias
+ * ("kaos navy", "baju kaos") and every other product are left completely
+ * untouched, so it can never silently undo an unrelated customization an
+ * owner made through the dashboard.
+ *
+ * This *was* considered unnecessary ("fresh installs only, document and
+ * move on") since this is a small portfolio-scope project with no real
+ * multi-tenant install base -- but this repo's own local dev DB
+ * (data/leads.db, gitignored) already has a row seeded with the bad alias
+ * from before this fix, which is a live, concrete instance of exactly the
+ * "existing install" case the change spec asks about. Since a real,
+ * findable instance of the bug exists, fixing it beats documenting around
+ * it.
+ *
+ * @param {object} params
+ * @param {ReturnType<typeof import('./productsRepo').createProductsRepo>} params.productsRepo
+ * @returns {{ fixed: boolean }}
+ */
+function fixBareKaosAliasOnExistingInstalls({ productsRepo }) {
+  const navy = productsRepo.listAll().find((product) => product.name === 'Kaos Rimba Navy');
+  if (!navy) return { fixed: false };
+
+  const hasBareKaosAlias = navy.aliases.some((alias) => alias.trim().toLowerCase() === 'kaos');
+  if (!hasBareKaosAlias) return { fixed: false };
+
+  const fixedAliases = navy.aliases.filter((alias) => alias.trim().toLowerCase() !== 'kaos');
+  productsRepo.update(navy.id, { name: navy.name, aliases: fixedAliases });
+
+  log('products_bare_kaos_alias_removed_from_existing_install', {
+    productId: navy.id,
+    productName: navy.name,
+    remainingAliases: fixedAliases,
+  });
+  return { fixed: true };
+}
+
+module.exports = { seedProductsFromJsonIfEmpty, fixBareKaosAliasOnExistingInstalls };

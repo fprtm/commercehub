@@ -527,7 +527,7 @@ change:**
 {
   "matchThreshold": 0.65,
   "products": [
-    { "name": "Kaos Rimba Navy", "aliases": ["kaos navy", "kaos", "baju kaos"] }
+    { "name": "Kaos Rimba Navy", "aliases": ["kaos navy", "baju kaos"] }
   ],
   "intentDenylist": ["nyesel", "bocor halus"]
 }
@@ -554,15 +554,22 @@ replacement for) the built-in defaults in
 it exists), so a real client can extend it without a code change but can't
 accidentally remove the safety floor.
 
-**Aliases matter more than they look.** A generic one-word alias (e.g.
-`"kaos"` on "Kaos Rimba Navy") is what lets a short, vague customer
-message like "kaosnya ada?" or "membeli kaos" match at all — a customer
-rarely types a product's full catalog name. Without at least one short,
-natural alias per product, only messages that closely echo the full name
-will match; everything else falls to `needs_review`. This is a deliberate,
-documented trade-off, not a bug: a business owner who wants better
-coverage adds more aliases (the actual words their customers tend to use)
-from the Products page.
+**Aliases matter more than they look.** A short, natural alias (e.g.
+`"kaos navy"` on "Kaos Rimba Navy") is what lets a short, vague customer
+message like "kaos navy nya ada?" match at all — a customer rarely types a
+product's full catalog name. Without at least one short, natural alias per
+product, only messages that closely echo the full name will match;
+everything else falls to `needs_review`. This is a deliberate, documented
+trade-off, not a bug: a business owner who wants better coverage adds more
+aliases (the actual words their customers tend to use) from the Products
+page.
+
+**Caution: a bare, generic single-word alias (e.g. just `"kaos"`, with no
+qualifier) is a trap once more than one similar product exists** — see
+"Third round: 15-customer adversarial simulation" below (Bug 2) for the
+real incident this caused (a bare `"kaos"` alias on one product made a
+sibling product's own full name unmatchable) and FR-903's non-blocking
+warning that now flags this exact pattern at save time.
 
 An empty product catalog (a fresh install with nothing seeded/added yet,
 or every product deactivated) is not an error — every Q1 answer just
@@ -755,6 +762,113 @@ tolerance for longer denylist words is unaffected.
 
 **Low — the accuracy note only disclosed false negatives.** See "What this
 is not" below, now updated to disclose the false-positive risk too.
+
+### Third round: 15-customer adversarial simulation (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md)
+
+A 15-simulated-customer realistic stress test (`scripts/simulate-customers.js`,
+run against the real seeded 4-product catalog, not isolated fixtures — see
+that script's own doc comment) found 3 more real defects, all now fixed.
+They only surfaced once multiple similar products (Kaos Rimba Navy / Kaos
+Rimba Hitam) coexisted in the same catalog, which is why 229 passing unit
+tests never caught them.
+
+**Bug 1 (safety-critical) — deactivating a product could silently misroute
+a customer to a different active product.** Matching only ever scored the
+ACTIVE product pool (`productsRepo.listActive()`). Deactivating "Kaos
+Rimba Navy" and sending its exact name, `"kaos rimba navy ada?"`, used to
+score a confident **0.667** match on **"Kaos Rimba Hitam"** against the
+now-Navy-less active pool (2 of Hitam's 3 name tokens — "kaos", "rimba" —
+still matched, clearing the 0.65 threshold once Navy itself was no longer
+around to outscore it at 1.0) — a real customer asking about a
+discontinued product could be silently told about the wrong one. **Fixed**:
+`src/services/inboundMessageProcessor.js` now also scores every
+would-be-confident match against the FULL catalog (active + inactive, via
+`productsRepo.listAll()`) right before returning it. If the full catalog's
+own winner is inactive, the result is forced to no-match/`needs_review`
+regardless of what the active-only pool said (see
+`guardAgainstInactiveFullCatalogWinner()` in that file, applied to both the
+Q1 match and the FR-802 post-completion re-match paths). Covered end to
+end in `tests/inactiveFullCatalogGuard.test.js`, reproducing the exact
+bug: deactivate Navy via the real `productsRepo`, send its name through
+the real `processInboundMessage`, assert no match / `needs_review=true` —
+never a silent hand-off to Hitam.
+
+**Bug 2 (data/validation) — a generic single-word alias on one product made
+a sibling product's own full name unmatchable.** `"kaos"` (bare) was an
+alias on Kaos Rimba Navy only, even though it's a generic word every
+kaos-family product shares. Any message naming a DIFFERENT kaos product by
+its full name tied with Navy via that alias and got suppressed as
+"ambiguous" — e.g. `"mau beli kaos rimba hitam"` failed to resolve.
+**Fixed**: removed the bare `"kaos"` alias from Kaos Rimba Navy's entry in
+`config/products.json` (kept the more specific `"kaos navy"`, `"baju
+kaos"`). Since FR-702 made the database the source of truth (the JSON file
+is now read only once, to seed an empty table — see "Configuring the
+product catalog" below), a **one-time backfill migration**
+(`fixBareKaosAliasOnExistingInstalls()` in `src/services/productsSeed.js`,
+called on every boot right after the seed step, same idempotent-by-design
+pattern) also strips the alias from any install that already completed
+that one-time seed before this fix shipped, so existing installs are not
+stuck with the bad data forever. It touches only that one exact alias on
+that one exact product — every other alias/product is left untouched.
+
+**Bug 2 prevention (FR-903)** — `src/services/productsRepo.js`'s
+`create()`/`update()` now log a **non-blocking** warning
+(`product_alias_shadows_active_product_name_warning`, same "log, don't
+reject" pattern as `productsLoader.js`'s existing
+`products_config_duplicate_alias_warning`) whenever a new **single-word**
+alias, once stemmed, exactly matches a stemmed token inside another
+**active** product's own name — exactly the shape of Bug 2's root cause.
+Scoped to single-word aliases only (not every token of a multi-word alias
+like `"kaos navy"`) so it flags the one genuinely dangerous pattern
+without drowning routine aliases that merely share a common family word in
+noise. Covers both the dashboard CRUD routes and the JSON seed loader (the
+latter has no alias-processing path of its own — it calls `create()`
+directly, so the check runs there for free). See
+`tests/productsRepo.test.js`.
+
+**Bug 3 (tuning) — intent-denylist fuzzy match false positive: "keluarga"
+(family) vs "keluhan" (complaint).** The denylist's Jaro-Winkler
+fuzzy-match threshold (0.85, shared with general token-coverage matching)
+was too loose: stemmed `"keluarga"` vs stemmed `"keluhan"`/`"keluh"`
+measured **JW = 0.86** — just above 0.85 — incorrectly triggering
+complaint-suppression on a genuine purchase inquiry that happened to
+mention family plans. **Fixed**: split the denylist's fuzzy tolerance into
+its own constant, `DENYLIST_FUZZY_MATCH_THRESHOLD = 0.90`, separate from
+`TOKEN_MATCH_SIMILARITY_THRESHOLD` (left at 0.85, still governing ordinary
+product-name/alias typo tolerance, e.g. "kaus" for "kaos", untouched by
+this fix). 0.90 is the lowest of the values tried (0.90, 0.92) that clears
+the false positive while keeping typo tolerance for real denylist words:
+
+| Comparison | Measured JW | Old (0.85) | New (0.90) |
+|---|---|---|---|
+| "keluarga" vs stemmed "keluhan" (false positive) | 0.86 | matched (wrong) | **no longer matches** |
+| "komplein" vs "komplain" (real typo) | 0.95 | matched | **still matches** |
+| "rusakk" vs "rusak" (real typo) | 0.967 | matched | **still matches** |
+
+0.92 was also tried and rejected: it still fixes "keluarga", but starts
+rejecting other realistic typos tested during tuning (e.g. "pechah" for
+"pecah" measured at 0.9144, which clears 0.90 but not 0.92) — the lowest
+value that fixes the false positive keeps the most typo tolerance. See
+`tests/productMatcher.test.js`'s FR-904 tests for the measured scores
+asserted directly.
+
+**Known residual gap (disclosed, not fixed by this round — out of
+scope):** the simulation's scenario 13 (`scripts/simulate-customers.js`)
+combines the "keluarga" false positive with an unusually long, rambling
+message (42 stemmed tokens, "kaos" repeated 4 times). With Bug 3 fixed,
+the denylist correctly no longer flags it — but the length-penalty scoring
+(`FREE_UNACCOUNTED_TOKENS_PER_MATCH`, tuned in the second independent
+review above) does not credit repeated occurrences of an already-matched
+word, so the raw score for that specific message still lands around
+**0.11**, well below the 0.65 threshold, independent of the denylist
+entirely. Fixing that would mean touching the length-penalty formula,
+which is out of this change's stated scope (FR-904 was specifically "raise
+the denylist's fuzzy-match threshold", nothing else) and risks the exact
+regressions the "twice-tuned" constant above was hardened against. This is
+tracked as an open, disclosed follow-up, not silently pushed through — see
+`scripts/simulate-customers.js`'s scenario-13 assertions, which check the
+denylist fix directly (passes) and the full end-to-end outcome honestly
+(currently fails, on purpose, so the gap stays visible on every re-run).
 
 ### What doesn't change
 

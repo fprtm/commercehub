@@ -12,7 +12,7 @@ const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
 const { createSettingsRepo } = require('./services/settingsRepo');
 const { createProductsRepo } = require('./services/productsRepo');
-const { seedProductsFromJsonIfEmpty } = require('./services/productsSeed');
+const { seedProductsFromJsonIfEmpty, fixBareKaosAliasOnExistingInstalls } = require('./services/productsSeed');
 const { loadQuestionsConfig } = require('./services/questionsLoader');
 const { loadProductsConfig } = require('./services/productsLoader');
 const { DEFAULT_MATCH_THRESHOLD } = require('./services/productMatcher');
@@ -118,6 +118,12 @@ function main() {
   // zero effect.
   const productsRepo = createProductsRepo(db);
   seedProductsFromJsonIfEmpty({ productsRepo, products: productsConfig });
+  // FR-902 (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md, Bug 2
+  // data fix): a one-time, idempotent backfill for installs that already
+  // completed the seed above before the bare "kaos" alias was removed from
+  // config/products.json -- see fixBareKaosAliasOnExistingInstalls()'s doc
+  // comment for why this is safe to call unconditionally on every boot.
+  fixBareKaosAliasOnExistingInstalls({ productsRepo });
 
   let metaClient;
   let baileysConnector = null;

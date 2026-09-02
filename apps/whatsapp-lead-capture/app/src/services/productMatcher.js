@@ -192,6 +192,33 @@ const FREE_UNACCOUNTED_TOKENS_PER_MATCH = 5;
 // "rusakk") when both words are at least this long.
 const DENYLIST_SHORT_WORD_EXACT_MATCH_LENGTH = 5;
 
+// Post-review fix (FR-904, docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md,
+// Bug 3): a 15-customer adversarial simulation found "keluarga" (family --
+// completely benign) stems to "keluarga" and fuzzy-matched stemmed
+// "keluhan"/"keluh" (complaint) at JW=0.86 -- just above the general
+// TOKEN_MATCH_SIMILARITY_THRESHOLD (0.85) that findIntentDenylistHits()
+// used to reuse for its own fuzzy tolerance, incorrectly suppressing a
+// genuine purchase inquiry as a complaint. Splitting this into its OWN,
+// stricter constant (rather than raising TOKEN_MATCH_SIMILARITY_THRESHOLD
+// itself) is deliberate: that shared constant also governs ordinary
+// product-name/alias token coverage (e.g. "kaus" typo-matching "kaos"),
+// which has its own, already-tuned typo-tolerance behavior this fix must
+// not touch.
+//
+// Empirically measured (see tests/productMatcher.test.js for the assertions):
+//   - "keluarga" (family) vs stemmed "keluhan"/"keluh" (complaint): JW=0.86
+//     -- must NOT trigger the denylist.
+//   - "komplein" (real typo of "komplain")                        : JW=0.95
+//   - "rusakk" (real typo of "rusak")                              : JW=0.9667
+// 0.90 is the smallest of the values tried (0.90, 0.92) that clears the
+// false positive (0.86 < 0.90) while both genuine typos above still clear
+// it easily (0.95 and 0.9667 >= 0.90). 0.92 was also tried and rejected: it
+// still fixes "keluarga", but starts rejecting other realistic typos this
+// module tested during tuning (e.g. "pechah" for "pecah" scores 0.9144,
+// which would fall below 0.92 but still clears 0.90) -- picking the lowest
+// value that fixes the false positive keeps the most typo tolerance.
+const DENYLIST_FUZZY_MATCH_THRESHOLD = 0.9;
+
 // Post-review fix (Medium finding): if the top-scoring product and the
 // runner-up are both >= threshold and within this margin of each other,
 // treat the match as ambiguous (no confident single answer) rather than
@@ -259,9 +286,12 @@ function normalizeAndStemToTokens(text) {
  * word from `denylist` (already-stemmed, e.g. DEFAULT_INTENT_DENYLIST)?
  *
  * Uses Jaro-Winkler fuzzy tolerance (a typo like "rusakk" should still
- * trip it) at the same strict TOKEN_MATCH_SIMILARITY_THRESHOLD bar used
- * everywhere else in this module -- BUT (second post-review fix,
- * "Secondary" finding) only when BOTH words being compared are at least
+ * trip it) at the DENYLIST_FUZZY_MATCH_THRESHOLD bar -- deliberately
+ * stricter than the general TOKEN_MATCH_SIMILARITY_THRESHOLD used
+ * everywhere else in this module (see that constant's doc comment for the
+ * FR-904 false-positive this fixes: "keluarga" vs "keluhan") -- BUT
+ * (second post-review fix, "Secondary" finding) only when BOTH words being
+ * compared are at least
  * DENYLIST_SHORT_WORD_EXACT_MATCH_LENGTH characters long. Jaro-Winkler is
  * unreliable on short strings purely as a function of their length (e.g.
  * "pas" vs "palsu" scores ~0.89 -- above the fuzzy bar -- with no
@@ -287,7 +317,7 @@ function findIntentDenylistHits(customerTokens, denylist) {
       const matches =
         shorterLength < DENYLIST_SHORT_WORD_EXACT_MATCH_LENGTH
           ? customerToken === stemmed
-          : natural.JaroWinklerDistance(customerToken, stemmed, { ignoreCase: true }) >= TOKEN_MATCH_SIMILARITY_THRESHOLD;
+          : natural.JaroWinklerDistance(customerToken, stemmed, { ignoreCase: true }) >= DENYLIST_FUZZY_MATCH_THRESHOLD;
       if (matches) {
         hits.add(original);
       }
@@ -447,4 +477,5 @@ module.exports = {
   DEFAULT_AMBIGUITY_MARGIN,
   DEFAULT_INTENT_DENYLIST,
   DENYLIST_SHORT_WORD_EXACT_MATCH_LENGTH,
+  DENYLIST_FUZZY_MATCH_THRESHOLD,
 };

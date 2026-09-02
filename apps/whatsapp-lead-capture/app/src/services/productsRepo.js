@@ -23,6 +23,9 @@
  * every write re-serializes a normalized (trimmed, non-empty) array, so
  * callers never have to think about the JSON encoding at all.
  */
+const { normalizeAndStemToTokens } = require('./productMatcher');
+const { log } = require('../utils/logger');
+
 function createProductsRepo(db) {
   const insertStmt = db.prepare(`
     INSERT INTO products (name, aliases, is_active, created_at, updated_at)
@@ -68,6 +71,79 @@ function createProductsRepo(db) {
     return existing;
   }
 
+  /**
+   * FR-903 (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md, Bug 2
+   * prevention): a lightweight, NON-BLOCKING warning -- logged only, never
+   * thrown -- for every alias being saved (via create() or update() below)
+   * whose stemmed tokens overlap with a stemmed token inside another
+   * ACTIVE product's own NAME. This is exactly the shape of Bug 2's root
+   * cause (a bare "kaos" alias on Kaos Rimba Navy made Kaos Rimba Hitam's
+   * own full name unmatchable): flagging it here, at write time, catches a
+   * future catalog edit that recreates the same trap, without blocking the
+   * save (an owner may have a legitimate reason, and this project's
+   * existing duplicate-alias warning in productsLoader.js's
+   * warnOnDuplicateAliases() follows the same "log, don't reject" pattern
+   * this mirrors).
+   *
+   * Runs for BOTH the dashboard CRUD routes (src/routes/products.js, which
+   * calls create()/update() directly) and the one-time JSON seed loader
+   * (src/services/productsSeed.js, which also calls create() directly and
+   * has no alias-processing path of its own) -- putting the check here,
+   * not in either caller, covers both for free.
+   *
+   * Deliberately scoped to SINGLE-TOKEN aliases only (after stemming) --
+   * "the new alias ... exactly matches a stemmed token", per FR-903's own
+   * wording. A multi-word alias like "kaos navy" also happens to contain
+   * the shared family word "kaos", but it is NOT the bug shape being
+   * guarded against: its extra token ("navy") makes it specific enough
+   * that it does not, by itself, let a generic word alone tie against a
+   * sibling product's full name (see productMatcher.js's candidateCoverage
+   * scoring -- a 2-token candidate only scores 1.0 when BOTH tokens are
+   * present in the customer's text). Checking every token of every
+   * multi-word alias against every other active product's name would
+   * warn on nearly any alias sharing a common family word (e.g. "kaos" is
+   * legitimately in every kaos-family product's own aliases), drowning out
+   * the one genuinely dangerous case -- a bare, single generic word acting
+   * as an alias all by itself -- in noise.
+   *
+   * `ownProductId` excludes the product being edited from the "other
+   * products" comparison set (irrelevant for create(), since the new row
+   * doesn't exist in the table yet at the time this runs).
+   *
+   * @param {string[]} aliases - already-normalized (trimmed, non-empty).
+   * @param {number|undefined} ownProductId
+   * @param {string} ownProductName
+   */
+  function warnOnAliasesShadowingActiveProductNames(aliases, ownProductId, ownProductName) {
+    if (!Array.isArray(aliases) || aliases.length === 0) return;
+
+    const otherActiveProducts = listActiveStmt
+      .all()
+      .map(toDomain)
+      .filter((product) => product.id !== ownProductId);
+    if (otherActiveProducts.length === 0) return;
+
+    for (const alias of aliases) {
+      const aliasTokens = normalizeAndStemToTokens(alias);
+      if (aliasTokens.length !== 1) continue; // only single-word aliases are the Bug-2 shape -- see doc comment above
+      const [aliasToken] = aliasTokens;
+
+      for (const otherProduct of otherActiveProducts) {
+        const nameTokens = normalizeAndStemToTokens(otherProduct.name);
+        if (nameTokens.includes(aliasToken)) {
+          log('product_alias_shadows_active_product_name_warning', {
+            alias,
+            ownProduct: ownProductName,
+            shadowedProduct: otherProduct.name,
+            shadowedToken: aliasToken,
+            message:
+              'This alias, once stemmed, exactly matches a word inside another ACTIVE product\'s own name -- a customer message naming that other product by name risks tying/losing to this alias (the same shape as the "kaos" bare-alias bug -- FR-902). Consider making this alias more specific.',
+          });
+        }
+      }
+    }
+  }
+
   return {
     /** Used by the one-time seed step (productsSeed.js) to decide whether to run at all (NFR-703). */
     isEmpty() {
@@ -92,10 +168,13 @@ function createProductsRepo(db) {
      * @param {{ name: string, aliases?: string[] }} params
      */
     create({ name, aliases }) {
+      const trimmedName = String(name).trim();
+      const normalizedAliases = normalizeAliases(aliases);
+      warnOnAliasesShadowingActiveProductNames(normalizedAliases, undefined, trimmedName);
       const now = new Date().toISOString();
       const info = insertStmt.run({
-        name: String(name).trim(),
-        aliases: JSON.stringify(normalizeAliases(aliases)),
+        name: trimmedName,
+        aliases: JSON.stringify(normalizedAliases),
         is_active: 1,
         created_at: now,
         updated_at: now,
@@ -109,10 +188,13 @@ function createProductsRepo(db) {
      */
     update(id, { name, aliases }) {
       requireExisting(id);
+      const trimmedName = String(name).trim();
+      const normalizedAliases = normalizeAliases(aliases);
+      warnOnAliasesShadowingActiveProductNames(normalizedAliases, id, trimmedName);
       updateStmt.run({
         id,
-        name: String(name).trim(),
-        aliases: JSON.stringify(normalizeAliases(aliases)),
+        name: trimmedName,
+        aliases: JSON.stringify(normalizedAliases),
         updated_at: new Date().toISOString(),
       });
       return toDomain(findByIdStmt.get(id));

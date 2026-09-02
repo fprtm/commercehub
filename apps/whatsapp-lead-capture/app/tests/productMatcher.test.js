@@ -9,7 +9,9 @@ const {
   findIntentDenylistHits,
   DEFAULT_MATCH_THRESHOLD,
   DEFAULT_INTENT_DENYLIST,
+  DENYLIST_FUZZY_MATCH_THRESHOLD,
 } = require('../src/services/productMatcher');
+const natural = require('natural');
 
 /**
  * FR-502 (docs/sdd/changes/2026-09-01-fuzzy-product-matching.md):
@@ -326,4 +328,74 @@ test('DENYLIST SHORT-WORD FIX: a realistic sentence using "pas" is not flagged, 
 test('DENYLIST SHORT-WORD FIX: typo tolerance is preserved for longer denylist words (only short-word fuzzy matching was tightened)', () => {
   const hits = findIntentDenylistHits(normalizeAndStemToTokens('barangnya rusakk parah sekali'), DEFAULT_INTENT_DENYLIST);
   assert.ok(hits.includes('rusak'), `expected the "rusakk" typo to still fuzzy-match "rusak", got ${JSON.stringify(hits)}`);
+});
+
+/**
+ * FR-904 (docs/sdd/changes/2026-09-02-fix-matching-safety-bugs.md, Bug 3
+ * tuning): a 15-customer adversarial simulation found "keluarga" (family,
+ * completely benign) stemming to itself and fuzzy-matching stemmed
+ * "keluhan"/"keluh" (complaint) at Jaro-Winkler 0.86 -- just above the old
+ * shared TOKEN_MATCH_SIMILARITY_THRESHOLD (0.85) that findIntentDenylistHits()
+ * used to reuse for its own fuzzy tolerance -- incorrectly suppressing a
+ * genuine purchase inquiry as a complaint. The fix raises the denylist's
+ * OWN fuzzy threshold (DENYLIST_FUZZY_MATCH_THRESHOLD) to 0.90, measured
+ * against both the false positive and real denylist-word typos below.
+ */
+test('FR-904: DENYLIST_FUZZY_MATCH_THRESHOLD is 0.90 -- the lowest of the values tried (0.90, 0.92) that fixes the false positive without losing typo tolerance', () => {
+  assert.equal(DENYLIST_FUZZY_MATCH_THRESHOLD, 0.9);
+});
+
+test('FR-904: "keluarga" (family) no longer fuzzy-matches stemmed "keluhan"/"keluh" (JW measured at 0.86, below the new 0.90 bar)', () => {
+  const stemmedKeluarga = normalizeAndStemToTokens('keluarga')[0];
+  const stemmedKeluhan = normalizeAndStemToTokens('keluhan')[0];
+  assert.equal(stemmedKeluarga, 'keluarga');
+  assert.equal(stemmedKeluhan, 'keluh');
+
+  const measuredScore = natural.JaroWinklerDistance(stemmedKeluarga, stemmedKeluhan, { ignoreCase: true });
+  assert.ok(
+    Math.abs(measuredScore - 0.86) < 0.01,
+    `expected the measured JW score to be ~0.86 (the false positive this fix targets), got ${measuredScore}`,
+  );
+  assert.ok(measuredScore < DENYLIST_FUZZY_MATCH_THRESHOLD, `0.86 must now be below the 0.90 bar, got ${measuredScore}`);
+
+  const hits = findIntentDenylistHits(normalizeAndStemToTokens('keluarga'), DEFAULT_INTENT_DENYLIST);
+  assert.deepEqual(hits, [], `"keluarga" must no longer trip the denylist, got ${JSON.stringify(hits)}`);
+});
+
+test('FR-904: a genuine typo of a real denylist word ("komplein" for "komplain", JW 0.95) still correctly triggers', () => {
+  const measuredScore = natural.JaroWinklerDistance('komplein', 'komplain', { ignoreCase: true });
+  assert.ok(
+    Math.abs(measuredScore - 0.95) < 0.01,
+    `expected the measured JW score to be ~0.95, got ${measuredScore}`,
+  );
+  assert.ok(measuredScore >= DENYLIST_FUZZY_MATCH_THRESHOLD, `0.95 must still clear the 0.90 bar, got ${measuredScore}`);
+
+  const hits = findIntentDenylistHits(normalizeAndStemToTokens('barangnya komplein terus'), DEFAULT_INTENT_DENYLIST);
+  assert.ok(hits.includes('komplain'), `expected "komplein" to still trip the denylist as a typo of "komplain", got ${JSON.stringify(hits)}`);
+});
+
+test('FR-904: a genuine typo of a real denylist word ("rusakk" for "rusak", JW ~0.967) still correctly triggers', () => {
+  const measuredScore = natural.JaroWinklerDistance('rusakk', 'rusak', { ignoreCase: true });
+  assert.ok(
+    measuredScore > 0.96 && measuredScore < 0.97,
+    `expected the measured JW score to be ~0.967, got ${measuredScore}`,
+  );
+  assert.ok(measuredScore >= DENYLIST_FUZZY_MATCH_THRESHOLD, `must still clear the 0.90 bar, got ${measuredScore}`);
+
+  const hits = findIntentDenylistHits(normalizeAndStemToTokens('barangnya rusakk parah'), DEFAULT_INTENT_DENYLIST);
+  assert.ok(hits.includes('rusak'), `expected "rusakk" to still trip the denylist as a typo of "rusak", got ${JSON.stringify(hits)}`);
+});
+
+test('FR-904 (end-to-end, the exact adversarial case): a long message naming a full product AND containing "keluarga" now resolves without the denylist forcing needs_review', () => {
+  const CATALOG_904 = [
+    { name: 'Kaos Rimba Navy', aliases: ['kaos navy', 'baju kaos'] },
+    { name: 'Kaos Rimba Hitam', aliases: ['kaos hitam'] },
+  ];
+  const result = matchProduct('mau tanya kaos rimba navy nya ada, buat jalan-jalan sama keluarga', CATALOG_904);
+  assert.deepEqual(result.flaggedTerms, [], `"keluarga" must not appear in flaggedTerms, got ${JSON.stringify(result.flaggedTerms)}`);
+});
+
+test('FR-904 (regression guard): the intent denylist still catches "keluhan" itself (an actual complaint word, not the "keluarga" false positive)', () => {
+  const hits = findIntentDenylistHits(normalizeAndStemToTokens('saya ada keluhan soal barang ini'), DEFAULT_INTENT_DENYLIST);
+  assert.ok(hits.includes('keluhan'), `an exact stemmed match for "keluhan" itself must still trip the denylist, got ${JSON.stringify(hits)}`);
 });
