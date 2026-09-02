@@ -18,6 +18,15 @@ function createLeadsRepo(db) {
   );
   const findById = db.prepare('SELECT * FROM leads WHERE id = ?');
   const listAll = db.prepare('SELECT * FROM leads ORDER BY datetime(first_message_at) DESC, id DESC');
+  // TICKET-1306 (docs/sdd/specs/002-telegram-multichannel/tickets/06-dashboard-channel-badge-filter.md,
+  // FR-1305): a second, narrowly-scoped statement rather than building the
+  // WHERE clause dynamically -- keeps the no-arg path (listAllMostRecentFirst()
+  // with no `channel`) running the exact same query it always has, so every
+  // pre-existing caller/test is unaffected by construction, not just by
+  // convention.
+  const listAllByChannel = db.prepare(
+    'SELECT * FROM leads WHERE channel = ? ORDER BY datetime(first_message_at) DESC, id DESC',
+  );
   const insert = db.prepare(`
     INSERT INTO leads (contact_id, channel, first_message_at, question1_answer, question2_answer, status, fallback_triggered, retry_count, created_at, updated_at)
     VALUES (@contact_id, @channel, @first_message_at, @question1_answer, @question2_answer, @status, @fallback_triggered, @retry_count, @created_at, @created_at)
@@ -142,7 +151,20 @@ function createLeadsRepo(db) {
       return toDomain(findById.get(id));
     },
 
-    listAllMostRecentFirst() {
+    /**
+     * TICKET-1306/FR-1305: optional `{ channel }` filter for the dashboard's
+     * channel dropdown. `listAllMostRecentFirst()` (no arg, or `channel`
+     * omitted/falsy) is unchanged default behavior -- every lead, same
+     * ordering, same statement as before this ticket. Passing a truthy
+     * `channel` ('whatsapp'|'telegram') scopes the result to that channel
+     * only.
+     *
+     * @param {{ channel?: string }} [options]
+     */
+    listAllMostRecentFirst({ channel } = {}) {
+      if (channel) {
+        return listAllByChannel.all(channel).map(toDomain);
+      }
       return listAll.all().map(toDomain);
     },
 

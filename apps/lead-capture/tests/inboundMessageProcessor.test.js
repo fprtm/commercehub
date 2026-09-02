@@ -141,3 +141,126 @@ test('FR-601 (post-review fix): markAsRead still fires for a new inbound message
 
   db.close();
 });
+
+/**
+ * TICKET-1305 (docs/sdd/specs/002-telegram-multichannel/tickets/05-media-message-capture.md,
+ * FR-1304, FSD Flow 2, threats.md SEC-1305): a non-text message
+ * (photo/sticker/etc) carrying a `mediaRef` (an opaque reference string --
+ * e.g. Telegram's `file_id` -- never the actual file bytes, per SEC-1305)
+ * must never be silently dropped, even with no caption and even on a
+ * contact's very first-ever message.
+ */
+test('TICKET-1305: a first-ever message that is a photo with no caption still creates the Lead and captures the media reference, with zero replies sent', async () => {
+  const db = createDb(':memory:');
+  const leadsRepo = createLeadsRepo(db);
+  const sent = [];
+  const { processInboundMessage } = createInboundMessageProcessor({
+    leadsRepo,
+    questionsConfig: TEST_CONFIG,
+    sendTextMessage: async (to, body) => { sent.push({ to, body }); },
+    sleep: async () => {},
+  });
+
+  const contactId = '628700000001';
+  const result = await processInboundMessage({
+    contactId,
+    messageBody: null,
+    messageType: 'photo',
+    mediaRef: 'file_abc123',
+    timestamp: new Date('2026-09-03T00:00:00.000Z').toISOString(),
+    channel: 'whatsapp_cloud_api',
+  });
+
+  // FR-1304: no scripted reply for the media itself -- and, since there's
+  // no caption, START_FLOW's usual ack+Q1 (which decideNextAction() would
+  // otherwise unconditionally queue for ANY first-ever message, media or
+  // not) is suppressed too.
+  assert.equal(result.decision.replies.length, 0, 'zero replies for a media-only first contact');
+  assert.equal(sent.length, 0, 'nothing was actually sent via sendTextMessage either');
+
+  const lead = leadsRepo.findByContact(contactId, 'whatsapp');
+  assert.ok(lead, 'a new Lead row must exist even though the first message had no usable text');
+  assert.equal(lead.contact_id, contactId);
+  assert.equal(lead.channel, 'whatsapp');
+  assert.equal(lead.question1_answer, null, 'no Q1/Q2 answers yet -- only the media note was captured');
+  assert.equal(lead.needs_review, 1);
+  assert.match(lead.additional_notes, /<media diterima: type=photo, ref=file_abc123>/);
+  assert.match(lead.additional_notes, /^\[2026-09-03T00:00:00Z\]/);
+
+  db.close();
+});
+
+test('TICKET-1305: an existing lead mid-flow sending a photo WITH a caption that matches a product runs the normal product-matching flow AND additively appends the media note', async () => {
+  const db = createDb(':memory:');
+  const leadsRepo = createLeadsRepo(db);
+  const CATALOG = [
+    { name: 'Kaos Rimba Navy', aliases: ['kaos navy', 'kaos', 'baju kaos'] },
+    { name: 'Kaos Rimba Hitam', aliases: ['kaos hitam'] },
+  ];
+  const sent = [];
+  const { processInboundMessage } = createInboundMessageProcessor({
+    leadsRepo,
+    questionsConfig: TEST_CONFIG,
+    sendTextMessage: async (to, body) => { sent.push(body); },
+    sleep: async () => {},
+    products: CATALOG,
+  });
+
+  const contactId = '628700000002';
+  await processInboundMessage({ contactId, messageBody: 'halo', messageType: 'text' });
+
+  const result = await processInboundMessage({
+    contactId,
+    messageBody: 'Kaos Rimba Navy',
+    messageType: 'photo',
+    mediaRef: 'file_xyz789',
+  });
+
+  // The caption drives the normal ANSWER_Q1/product-matching flow,
+  // completely unaffected by the media attachment riding alongside it.
+  assert.equal(result.decision.action, 'ANSWER_Q1');
+  assert.equal(result.decision.replies.length, 1, 'Q2 must still be sent -- caption handling is unaffected');
+  assert.equal(result.decision.replies[0], TEST_CONFIG.questions[1].text);
+  assert.match(sent.at(-1), /size \/ how should we contact you/i);
+
+  const lead = leadsRepo.findByContact(contactId, 'whatsapp');
+  assert.equal(lead.question1_answer, 'Kaos Rimba Navy');
+  assert.equal(lead.matched_product, 'Kaos Rimba Navy', 'caption still drives fuzzy product matching');
+  // FR-1304: the media note is ADDITIVE, appended alongside the normal
+  // caption-driven flow above, not a replacement of it.
+  assert.match(lead.additional_notes, /<media diterima: type=photo, ref=file_xyz789>/);
+
+  db.close();
+});
+
+test('TICKET-1305: media capture is not gated on channel -- a WA (non-Telegram) contact sending a sticker gets the same treatment', async () => {
+  const db = createDb(':memory:');
+  const leadsRepo = createLeadsRepo(db);
+  const sent = [];
+  const { processInboundMessage } = createInboundMessageProcessor({
+    leadsRepo,
+    questionsConfig: TEST_CONFIG,
+    sendTextMessage: async (to, body) => { sent.push({ to, body }); },
+    sleep: async () => {},
+  });
+
+  const contactId = '628700000003';
+  const result = await processInboundMessage({
+    contactId,
+    messageBody: null,
+    messageType: 'sticker',
+    mediaRef: 'sticker_ref_1',
+    channel: 'whatsapp_baileys', // explicitly WA, not Telegram
+  });
+
+  assert.equal(result.decision.replies.length, 0);
+  assert.equal(sent.length, 0);
+
+  const lead = leadsRepo.findByContact(contactId, 'whatsapp');
+  assert.ok(lead);
+  assert.equal(lead.channel, 'whatsapp');
+  assert.equal(lead.needs_review, 1);
+  assert.match(lead.additional_notes, /<media diterima: type=sticker, ref=sticker_ref_1>/);
+
+  db.close();
+});

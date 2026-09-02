@@ -23,6 +23,8 @@
     .badge-closed { background: #eee; color: #666; }
     .badge-new-indicator { background: #ffe4e4; color: #b3261e; margin-left: 0.4rem; }
     .badge-needs-review { background: #fff0d6; color: #8a5300; margin-left: 0.4rem; }
+    .badge-channel-whatsapp { background: #e7f7ec; color: #1e7d1e; }
+    .badge-channel-telegram { background: #e6f4fc; color: #1a7fb0; }
     .answer { color: #444; }
     .answer.empty { color: #999; font-style: italic; }
     .matched-product { display: block; margin-top: 0.3rem; font-size: 0.82rem; color: #1e7d1e; }
@@ -37,6 +39,11 @@
     .auto-reply-status .badge-off { background: #f4f4f4; color: #777; }
     .auto-reply-bar button { padding: 0.4rem 0.9rem; font-size: 0.85rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
     .auto-reply-bar button:hover { background: #f0f0f0; }
+    .channel-filter { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .channel-filter label { font-size: 0.85rem; color: #555; }
+    .channel-filter select { padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid #ccc; font-size: 0.85rem; }
+    .channel-filter button { padding: 0.35rem 0.7rem; font-size: 0.82rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    .channel-filter button:hover { background: #f0f0f0; }
   </style>
 </head>
 <body>
@@ -66,6 +73,16 @@
       <div class="flash"><%= flash %></div>
     <% } %>
 
+    <form method="GET" action="/leads" class="channel-filter">
+      <label for="channel-filter">Channel</label>
+      <select id="channel-filter" name="channel">
+        <option value="" <%= !selectedChannel ? 'selected' : '' %>>All channels</option>
+        <option value="whatsapp" <%= selectedChannel === 'whatsapp' ? 'selected' : '' %>>WhatsApp</option>
+        <option value="telegram" <%= selectedChannel === 'telegram' ? 'selected' : '' %>>Telegram</option>
+      </select>
+      <button type="submit">Filter</button>
+    </form>
+
     <% if (leads.length === 0) { %>
       <div class="empty-state">
         <p><strong>No leads yet</strong></p>
@@ -75,7 +92,8 @@
       <table>
         <thead>
           <tr>
-            <th>Phone number</th>
+            <th>Contact</th>
+            <th>Channel</th>
             <th>First message</th>
             <th>Product interest (Q1)</th>
             <th>Size / contact preference (Q2)</th>
@@ -87,6 +105,7 @@
           <% leads.forEach(function(lead) { %>
             <tr>
               <td><%= lead.contact_id %></td>
+              <td><span class="badge badge-channel-<%= lead.channel %>"><%= lead.channel === 'telegram' ? 'Telegram' : 'WhatsApp' %></span></td>
               <td><%= new Date(lead.first_message_at).toLocaleString() %></td>
               <td class="answer <%= lead.question1_answer ? '' : 'empty' %>">
                 <%= lead.question1_answer || 'No answer yet' %>

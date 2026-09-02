@@ -230,6 +230,14 @@ function createInboundMessageProcessor({
      *   `markAsRead`/`sendTypingIndicator` below so the read receipt/typing
      *   indicator can reference the specific message that triggered this
      *   reply. Optional -- if omitted, markAsRead simply has nothing to mark.
+     * @param {string} [params.mediaRef] - TICKET-1305 (FR-1304, FSD Flow 2):
+     *   an opaque reference string for a non-text message's attachment
+     *   (e.g. Telegram's `file_id`) -- SEC-1305: a REFERENCE only, never the
+     *   actual file bytes; this function never downloads or inspects
+     *   anything, it only records the string it's given. Optional/undefined
+     *   for a plain text message. When present alongside `messageType !==
+     *   'text'`, drives the media-capture branch near the end of this
+     *   function -- see the comment there for the full behavior.
      */
     async processInboundMessage({
       contactId,
@@ -238,6 +246,7 @@ function createInboundMessageProcessor({
       timestamp,
       channel = 'whatsapp_cloud_api',
       messageId,
+      mediaRef,
     }) {
       const dbChannel = toLeadChannel(channel);
       const existingLead = leadsRepo.findByContact(contactId, dbChannel);
@@ -454,6 +463,51 @@ function createInboundMessageProcessor({
         // stateMachine.js, and nothing in this block pushes into it. This
         // change is data capture only; the send loop below still sends
         // nothing for this message.
+      }
+
+      // TICKET-1305 (FR-1304, FSD Flow 2, SEC-1305): media-message capture
+      // as an attachment REFERENCE only -- extends the "never silently
+      // drop a message" principle (see the NO_OP block above) to non-text
+      // messages, which that block's `hasUsableText(messageBody)` gate
+      // never covers (a photo/sticker with no caption has no text to log
+      // or fuzzy-match). Fires whenever `messageType !== 'text'` AND a
+      // `mediaRef` was actually supplied, regardless of `decision.action`
+      // (START_FLOW, ANSWER_Q1/Q2, RETRY, FALLBACK, or NO_OP -- every one
+      // of them may carry a media attachment) and regardless of whether a
+      // caption came with it.
+      //
+      // "Create the lead first if this is the contact's first-ever
+      // message" (per the ticket) needs NO special-cased extra logic here:
+      // `decideNextAction()` already returns `createLead: true`
+      // unconditionally for ANY first message from a contact (see
+      // stateMachine.js -- the `!existingLead` branch never gates on
+      // `hasUsableText`), so the `decision.createLead` block far above has
+      // already created the row and assigned it to `lead` by the time
+      // execution reaches here, purely from the pre-existing code path.
+      // The only genuinely new behavior needed is capturing the media
+      // reference onto that (possibly just-created) row.
+      if (messageType !== 'text' && mediaRef && lead) {
+        const mediaNoteTimestamp = (timestamp ? new Date(timestamp) : new Date()).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        lead = leadsRepo.appendAdditionalNote(
+          lead.id,
+          `[${mediaNoteTimestamp}] <media diterima: type=${messageType}, ref=${mediaRef}>`,
+          { needsReview: true },
+        );
+
+        // A caption (`hasUsableText(messageBody)` true) means the normal
+        // text-driven flow above (product matching, Q1/Q2 progression,
+        // etc.) already computed whatever `replies` this turn genuinely
+        // warrants -- left completely untouched here, per the ticket's
+        // "additive, never a replacement" requirement. With NO caption,
+        // this turn carries no text for the state machine to have
+        // meaningfully acted on, so no scripted reply is sent for the
+        // media itself (out of scope per the ticket -- no "thanks for the
+        // photo" copy decision made here): whatever `replies` the
+        // no-caption path computed (e.g. START_FLOW's ack+Q1 on a
+        // media-only first contact) is suppressed back to `[]`.
+        if (!hasUsableText(messageBody)) {
+          replies = [];
+        }
       }
 
       // FR-402/NFR-401: read fresh on every call, no caching -- a toggle

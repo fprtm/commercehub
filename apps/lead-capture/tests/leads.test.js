@@ -199,6 +199,96 @@ test('technical-design lifecycle: a closed lead shows no action buttons on the d
   }
 });
 
+test('TICKET-1306: leadsRepo.listAllMostRecentFirst({ channel }) narrows results, no-arg call unchanged', async () => {
+  const ctx = await startTestServer();
+  try {
+    const repo = createLeadsRepo(ctx.db);
+    const wa = repo.create({ contactId: '6281111111111', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    const tg = repo.create({ contactId: '222222222', channel: 'telegram', firstMessageAt: '2026-09-01T00:01:00.000Z' });
+
+    const all = repo.listAllMostRecentFirst();
+    assert.equal(all.length, 2, 'no-arg call returns every lead regardless of channel');
+    assert.ok(all.some((l) => l.id === wa.id) && all.some((l) => l.id === tg.id));
+
+    const waOnly = repo.listAllMostRecentFirst({ channel: 'whatsapp' });
+    assert.equal(waOnly.length, 1);
+    assert.equal(waOnly[0].id, wa.id);
+
+    const tgOnly = repo.listAllMostRecentFirst({ channel: 'telegram' });
+    assert.equal(tgOnly.length, 1);
+    assert.equal(tgOnly[0].id, tg.id);
+
+    // Explicit `{}` / falsy channel must behave identically to no-arg.
+    const explicitEmpty = repo.listAllMostRecentFirst({});
+    assert.equal(explicitEmpty.length, 2);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('TICKET-1306: GET /leads?channel=telegram renders only telegram leads, with header/badges/select', async () => {
+  const ctx = await startTestServer();
+  try {
+    const repo = createLeadsRepo(ctx.db);
+    repo.create({ contactId: '6281222222222', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    repo.create({ contactId: '333333333', channel: 'telegram', firstMessageAt: '2026-09-01T00:01:00.000Z' });
+
+    const cookie = await loginAndGetCookie(ctx);
+    const res = await fetch(`${ctx.baseUrl}/leads?channel=telegram`, { headers: { Cookie: cookie } });
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+    assert.match(html, /<th>Contact<\/th>/);
+    assert.match(html, /333333333/);
+    assert.doesNotMatch(html, /6281222222222/, 'WhatsApp lead must not appear when filtered to telegram');
+    assert.match(html, /class="badge badge-channel-telegram"/);
+    assert.doesNotMatch(html, /class="badge badge-channel-whatsapp"/);
+    // Selected option persisted in the rendered <select>.
+    assert.match(html, /<option value="telegram" selected>Telegram<\/option>/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('TICKET-1306: GET /leads with no filter shows "All channels" selected and both channels\' badges', async () => {
+  const ctx = await startTestServer();
+  try {
+    const repo = createLeadsRepo(ctx.db);
+    repo.create({ contactId: '6281333333333', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+    repo.create({ contactId: '444444444', channel: 'telegram', firstMessageAt: '2026-09-01T00:01:00.000Z' });
+
+    const cookie = await loginAndGetCookie(ctx);
+    const res = await fetch(`${ctx.baseUrl}/leads`, { headers: { Cookie: cookie } });
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+    assert.match(html, /<option value="" selected>All channels<\/option>/);
+    assert.match(html, /6281333333333/);
+    assert.match(html, /444444444/);
+    assert.match(html, /class="badge badge-channel-whatsapp"/);
+    assert.match(html, /class="badge badge-channel-telegram"/);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('TICKET-1306: GET /leads?channel=telegram with zero telegram leads shows the existing empty state', async () => {
+  const ctx = await startTestServer();
+  try {
+    const repo = createLeadsRepo(ctx.db);
+    repo.create({ contactId: '6281444444444', channel: 'whatsapp', firstMessageAt: '2026-09-01T00:00:00.000Z' });
+
+    const cookie = await loginAndGetCookie(ctx);
+    const res = await fetch(`${ctx.baseUrl}/leads?channel=telegram`, { headers: { Cookie: cookie } });
+    const html = await res.text();
+
+    assert.equal(res.status, 200);
+    assert.match(html, /No leads yet/);
+  } finally {
+    await ctx.close();
+  }
+});
+
 test('T-010 POST /leads/:id/status requires authentication', async () => {
   const ctx = await startTestServer();
   try {

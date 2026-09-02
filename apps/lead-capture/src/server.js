@@ -6,6 +6,7 @@ const path = require('path');
 const { createApp } = require('./app');
 const { createDb } = require('./db');
 const { createMetaClient, createBaileysConnector } = require('@rimba/whatsapp-connector');
+const { createTelegramConnector } = require('@rimba/telegram-connector');
 const { createInboundMessageProcessor } = require('./services/inboundMessageProcessor');
 const { createLeadsRepo } = require('./services/leadsRepo');
 const { createFailedEventsRepo } = require('./services/failedEventsRepo');
@@ -85,6 +86,107 @@ function createDisabledMetaClient() {
   };
 }
 
+/**
+ * TICKET-1304 (docs/sdd/specs/002-telegram-multichannel/sds.md,
+ * "Architecture Decision — Composition-Root Channel Registry"): the
+ * Telegram half of the composition root, factored out of main() so it can
+ * be exercised directly in tests without booting a real HTTP server or
+ * requiring real env vars -- same reasoning `createApp(deps)` already
+ * follows for the WA/dashboard side.
+ *
+ * Presence-driven, not a mode string (FR-1302): `telegramBotToken` empty
+ * (after trim) or omitted means Telegram is disabled and this returns
+ * `null` -- no connector is constructed, no processor is constructed, zero
+ * new code paths execute. This is what makes "TELEGRAM_BOT_TOKEN unset"
+ * byte-for-byte identical to this app's pre-ticket behavior.
+ *
+ * When enabled, constructs its OWN `leadsRepo`/`settingsRepo` instances
+ * against the same `db` file rather than reusing whichever instances the
+ * WA side happens to have built -- identical to the pattern the existing
+ * WHATSAPP_MODE=baileys branch below already uses for the same reason
+ * (neither repo caches, so multiple instances against the same db always
+ * agree; see settingsRepo.js's NFR-401 comment). This is what the SDS's
+ * "sharedDeps passed identically to both processor instances" refers to:
+ * the same *shape* of dependencies, wired the same way, not a literal
+ * shared object reference (WA's cloud_api-mode processor is similarly
+ * self-contained, built inside createWebhookRouter()).
+ *
+ * `markAsRead` is deliberately omitted -- the Telegram Bot API has no
+ * read-receipt concept for private chats, and `createInboundMessageProcessor`
+ * already treats it as optional/no-op by default (unmodified, see that
+ * file's own doc comment) -- no new code path needed here either.
+ *
+ * @param {object} params
+ * @param {string|undefined} params.telegramBotToken - raw `process.env.TELEGRAM_BOT_TOKEN`.
+ * @param {import('better-sqlite3').Database} params.db
+ * @param {object} params.questionsConfig
+ * @param {ReturnType<typeof import('./services/productsRepo').createProductsRepo>} [params.productsRepo]
+ * @param {number} [params.matchThreshold]
+ * @param {string[]} [params.intentDenylist]
+ * @param {(ms: number) => Promise<unknown>} [params.sleep] - forwarded to
+ *   createInboundMessageProcessor for the same NFR-603 reasons as
+ *   everywhere else it's threaded through; left undefined in production
+ *   (real delay), overridable by tests for a fast/deterministic run.
+ * @param {() => number} [params.random] - same reasoning as `sleep`.
+ * @param {typeof createTelegramConnector} [params.createTelegramConnectorImpl]
+ *   - defaults to the real `@rimba/telegram-connector` export; tests inject
+ *   a fake, connector-shaped factory instead (same injection pattern
+ *   `whatsappPair.test.js`'s `fakeBaileysConnector` already uses), so no
+ *   real network/polling ever happens in the test suite.
+ * @returns {{ connector: ReturnType<typeof createTelegramConnector> }|null}
+ */
+function createTelegramChannel({
+  telegramBotToken,
+  db,
+  questionsConfig,
+  productsRepo,
+  matchThreshold,
+  intentDenylist,
+  sleep,
+  random,
+  createTelegramConnectorImpl = createTelegramConnector,
+}) {
+  const token = (telegramBotToken || '').trim();
+  if (!token) return null;
+
+  const leadsRepo = createLeadsRepo(db);
+  const settingsRepo = createSettingsRepo(db);
+
+  // sendTextMessage/sendTypingIndicator forward to the connector via
+  // closure -- same circular-dependency-breaking trick the baileys branch
+  // below already uses (the connector needs the processor's callback at
+  // construction time, and the processor needs the connector's send
+  // functions).
+  let telegramConnector;
+  const { processInboundMessage } = createInboundMessageProcessor({
+    leadsRepo,
+    questionsConfig,
+    sendTextMessage: (chatId, text) => telegramConnector.sendTextMessage(chatId, text),
+    sendTypingIndicator: (chatId) => telegramConnector.sendTypingIndicator(chatId),
+    settingsRepo,
+    productsRepo,
+    matchThreshold,
+    intentDenylist,
+    sleep,
+    random,
+  });
+
+  telegramConnector = createTelegramConnectorImpl({
+    botToken: token,
+    onMessage: (update) =>
+      processInboundMessage({
+        contactId: String(update.chatId),
+        channel: 'telegram',
+        messageBody: update.text,
+        messageType: update.messageType,
+        messageId: update.telegramMessageId,
+        timestamp: update.timestampIso,
+      }),
+  });
+
+  return { connector: telegramConnector };
+}
+
 function main() {
   assertRequiredEnv();
 
@@ -123,6 +225,21 @@ function main() {
   // config/products.json -- see fixBareKaosAliasOnExistingInstalls()'s doc
   // comment for why this is safe to call unconditionally on every boot.
   fixBareKaosAliasOnExistingInstalls({ productsRepo });
+
+  // TICKET-1304 (SDS "Architecture Decision — Composition-Root Channel
+  // Registry"): a second, independent inboundMessageProcessor instance for
+  // Telegram, wired here regardless of WHATSAPP_MODE -- the two channels
+  // run concurrently, not as an exclusive switch. Returns null (and
+  // constructs nothing) when TELEGRAM_BOT_TOKEN is unset, so this line has
+  // zero effect on every pre-existing deployment/test.
+  const telegramChannel = createTelegramChannel({
+    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+    db,
+    questionsConfig,
+    productsRepo,
+    matchThreshold,
+    intentDenylist,
+  });
 
   let metaClient;
   let baileysConnector = null;
@@ -199,10 +316,18 @@ function main() {
       activeProductCount: productsRepo.listActive().length,
       matchThreshold,
       intentDenylistCount: intentDenylist.length,
+      // TICKET-1304: observability parity with whatsappMode above -- lets
+      // an operator confirm from the boot log alone whether the Telegram
+      // channel is active, without needing to know TELEGRAM_BOT_TOKEN was
+      // even a thing to check.
+      telegramEnabled: Boolean(telegramChannel),
     });
     console.log(`WhatsApp Lead Capture running on http://localhost:${port} (mode: ${WHATSAPP_MODE})`);
     if (WHATSAPP_MODE === 'baileys') {
       console.log(`Baileys mode active -- open http://localhost:${port}/whatsapp/pair (after logging in) to pair.`);
+    }
+    if (telegramChannel) {
+      console.log('Telegram channel active (TELEGRAM_BOT_TOKEN is set).');
     }
   });
 
@@ -214,6 +339,22 @@ function main() {
       console.error('Failed to start Baileys connector:', err.message);
     });
   }
+
+  if (telegramChannel) {
+    // TICKET-1304: started alongside (not instead of) the WA connector
+    // above -- both channels run concurrently, independent of
+    // WHATSAPP_MODE. Same fire-and-forget-with-logged-catch pattern as the
+    // baileys start above, for the same reason (don't block/crash the HTTP
+    // server on a channel-specific startup failure).
+    telegramChannel.connector.start().catch((err) => {
+      log('telegram_start_failed', { error: err.message });
+      console.error('Failed to start Telegram connector:', err.message);
+    });
+  }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = { main, createTelegramChannel };

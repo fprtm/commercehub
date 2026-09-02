@@ -17,6 +17,7 @@
   "dependencies": {
     "@rimba/humanized-timing": "*",
     "@rimba/product-matcher": "*",
+    "@rimba/telegram-connector": "*",
     "@rimba/whatsapp-connector": "*",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^16.4.5",
