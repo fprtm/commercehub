@@ -39,21 +39,12 @@ function resolveMatchThreshold(configuredThreshold) {
 const WHATSAPP_MODE = (process.env.WHATSAPP_MODE || 'cloud_api').trim();
 const VALID_WHATSAPP_MODES = ['cloud_api', 'baileys'];
 
-// Cloud API's env vars are only required in cloud_api mode -- Baileys mode
-// needs none of Meta's credentials (that's the point: zero setup friction,
-// see the change doc's "Why"). SESSION_SECRET/OWNER_* are required in both
-// modes since the dashboard (and the pairing screen) exist either way.
+// SESSION_SECRET/OWNER_* stay env-only (not moved to the DB like the
+// connector credentials below, docs/sdd/changes/2026-09-03-credentials-in-db.md):
+// they gate the dashboard login itself, so storing them behind that same
+// login would be circular. They're required in both WhatsApp modes since
+// the dashboard (and the pairing screen) exist either way.
 const BASE_REQUIRED_ENV_VARS = ['SESSION_SECRET', 'OWNER_USERNAME', 'OWNER_PASSWORD'];
-const CLOUD_API_REQUIRED_ENV_VARS = [
-  'WHATSAPP_VERIFY_TOKEN',
-  'WHATSAPP_ACCESS_TOKEN',
-  'WHATSAPP_PHONE_NUMBER_ID',
-  // Required, not optional: without this set, POST /webhook signature
-  // verification is silently skipped (see webhook.js), which would let
-  // anyone who finds the URL post fake WhatsApp events. A deployable build
-  // must not be able to boot into that state.
-  'WHATSAPP_APP_SECRET',
-];
 
 function assertRequiredEnv() {
   if (!VALID_WHATSAPP_MODES.includes(WHATSAPP_MODE)) {
@@ -61,8 +52,7 @@ function assertRequiredEnv() {
     process.exit(1);
   }
 
-  const requiredVars = [...BASE_REQUIRED_ENV_VARS, ...(WHATSAPP_MODE === 'cloud_api' ? CLOUD_API_REQUIRED_ENV_VARS : [])];
-  const missing = requiredVars.filter((key) => !process.env[key]);
+  const missing = BASE_REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
   if (missing.length > 0) {
     console.error(`Missing required environment variable(s): ${missing.join(', ')}`);
     console.error('Copy .env.example to .env and fill in real values before starting the server.');
@@ -117,7 +107,10 @@ function createDisabledMetaClient() {
  * file's own doc comment) -- no new code path needed here either.
  *
  * @param {object} params
- * @param {string|undefined} params.telegramBotToken - raw `process.env.TELEGRAM_BOT_TOKEN`.
+ * @param {string|undefined} params.telegramBotToken - from
+ *   `settingsRepo.getTelegramBotToken()` (docs/sdd/changes/2026-09-03-credentials-in-db.md
+ *   -- moved out of `process.env.TELEGRAM_BOT_TOKEN` into the DB, same
+ *   presence-driven semantics as before).
  * @param {import('better-sqlite3').Database} params.db
  * @param {object} params.questionsConfig
  * @param {ReturnType<typeof import('./services/productsRepo').createProductsRepo>} [params.productsRepo]
@@ -195,6 +188,12 @@ function main() {
   const resolvedDbPath = path.isAbsolute(dbPath) ? dbPath : path.join(process.cwd(), dbPath);
 
   const db = createDb(resolvedDbPath);
+  // docs/sdd/changes/2026-09-03-credentials-in-db.md: constructed early so
+  // the connector credentials below can be read from it -- settingsRepo
+  // never caches (NFR-401), and every other place in this file that needs
+  // one constructs its own instance against the same `db`, so this extra
+  // instance agrees with all the others by construction.
+  const settingsRepo = createSettingsRepo(db);
   const questionsConfig = loadQuestionsConfig();
   const {
     products: productsConfig,
@@ -233,13 +232,20 @@ function main() {
   // constructs nothing) when TELEGRAM_BOT_TOKEN is unset, so this line has
   // zero effect on every pre-existing deployment/test.
   const telegramChannel = createTelegramChannel({
-    telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
+    telegramBotToken: settingsRepo.getTelegramBotToken(),
     db,
     questionsConfig,
     productsRepo,
     matchThreshold,
     intentDenylist,
   });
+
+  // docs/sdd/changes/2026-09-03-credentials-in-db.md: read once at boot,
+  // same timing as every other credential here (WHATSAPP_MODE itself is
+  // also boot-time-only, FR-301) -- a value entered via
+  // GET/POST /settings/credentials after this point takes effect on the
+  // next restart, not live (the credentials.ejs view says so explicitly).
+  const waCreds = settingsRepo.getWhatsappCloudApiCredentials();
 
   let metaClient;
   let baileysConnector = null;
@@ -280,8 +286,8 @@ function main() {
     metaClient = createDisabledMetaClient();
   } else {
     metaClient = createMetaClient({
-      accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
-      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+      accessToken: waCreds.accessToken,
+      phoneNumberId: waCreds.phoneNumberId,
     });
   }
 
@@ -289,8 +295,8 @@ function main() {
     db,
     metaClient,
     questionsConfig,
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
-    appSecret: process.env.WHATSAPP_APP_SECRET,
+    verifyToken: waCreds.verifyToken,
+    appSecret: waCreds.appSecret,
     sessionSecret: process.env.SESSION_SECRET,
     ownerUsername: process.env.OWNER_USERNAME,
     ownerPassword: process.env.OWNER_PASSWORD,
@@ -325,9 +331,16 @@ function main() {
     console.log(`WhatsApp Lead Capture running on http://localhost:${port} (mode: ${WHATSAPP_MODE})`);
     if (WHATSAPP_MODE === 'baileys') {
       console.log(`Baileys mode active -- open http://localhost:${port}/whatsapp/pair (after logging in) to pair.`);
+    } else if (!waCreds.accessToken || !waCreds.phoneNumberId || !waCreds.appSecret || !waCreds.verifyToken) {
+      // docs/sdd/changes/2026-09-03-credentials-in-db.md: no boot-time
+      // crash for missing Cloud API credentials anymore (see server.js's
+      // top-level comment) -- this is the replacement signal, an explicit
+      // boot-log line pointing at where to fill them in, mirroring the
+      // Telegram "channel active/not" line below.
+      console.log(`Cloud API mode active but not fully configured -- open http://localhost:${port}/settings/credentials (after logging in) to add the missing credential(s).`);
     }
     if (telegramChannel) {
-      console.log('Telegram channel active (TELEGRAM_BOT_TOKEN is set).');
+      console.log('Telegram channel active (bot token is set).');
     }
   });
 

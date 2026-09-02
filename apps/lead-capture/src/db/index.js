@@ -52,6 +52,7 @@ function createDb(dbPath) {
   // elsewhere in this codebase).
   ensureLeadsColumns(db);
   ensureFailedEventsColumns(db);
+  ensureAppSettingsColumns(db);
 
   return db;
 }
@@ -124,6 +125,22 @@ function ensureFailedEventsColumns(db) {
   const existingColumns = new Set(db.prepare('PRAGMA table_info(failed_events)').all().map((col) => col.name));
   if (!existingColumns.has('channel')) {
     db.exec("ALTER TABLE failed_events ADD COLUMN channel TEXT NOT NULL DEFAULT 'whatsapp_cloud_api'");
+  }
+}
+
+/**
+ * Adds the owner-fillable credential columns (2026-09-03: tokens moved out
+ * of `.env`, see schema.sql's doc comment on `app_settings`) if this is an
+ * existing on-disk DB that predates them. Same idempotent pattern as
+ * ensureLeadsColumns()/ensureFailedEventsColumns() above.
+ */
+function ensureAppSettingsColumns(db) {
+  const existingColumns = new Set(db.prepare('PRAGMA table_info(app_settings)').all().map((col) => col.name));
+  const newColumns = ['whatsapp_verify_token', 'whatsapp_access_token', 'whatsapp_phone_number_id', 'whatsapp_app_secret', 'telegram_bot_token'];
+  for (const name of newColumns) {
+    if (!existingColumns.has(name)) {
+      db.exec(`ALTER TABLE app_settings ADD COLUMN ${name} TEXT`);
+    }
   }
 }
 

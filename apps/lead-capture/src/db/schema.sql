@@ -119,7 +119,25 @@ CREATE INDEX IF NOT EXISTS idx_leads_first_message_at ON leads(first_message_at)
 -- exists by then.
 CREATE TABLE IF NOT EXISTS app_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
-  auto_reply_enabled INTEGER NOT NULL DEFAULT 1 CHECK (auto_reply_enabled IN (0, 1))
+  auto_reply_enabled INTEGER NOT NULL DEFAULT 1 CHECK (auto_reply_enabled IN (0, 1)),
+  -- Added 2026-09-03: owner-fillable connector credentials, moved out of
+  -- `.env` and into the DB (dashboard-editable via GET/POST
+  -- /settings/credentials, src/routes/settings.js) -- unlike PORT/
+  -- DATABASE_PATH/SESSION_SECRET/OWNER_USERNAME/OWNER_PASSWORD/
+  -- WHATSAPP_MODE, which stay in `.env` because they're either needed
+  -- before the DB/dashboard auth even exists (bootstrap config, or the
+  -- owner-login credentials themselves -- a circular dependency if stored
+  -- behind the login they gate) or are a boot-time mode choice, not a
+  -- per-value credential an owner fills in from a provider's dashboard.
+  -- All nullable/no default: NULL means "not configured yet", same
+  -- "presence-driven" meaning TELEGRAM_BOT_TOKEN already had as an env var
+  -- (src/server.js's createTelegramChannel) -- moving it here doesn't
+  -- change that semantic, only where the presence check reads from.
+  whatsapp_verify_token TEXT,
+  whatsapp_access_token TEXT,
+  whatsapp_phone_number_id TEXT,
+  whatsapp_app_secret TEXT,
+  telegram_bot_token TEXT
 );
 
 INSERT OR IGNORE INTO app_settings (id, auto_reply_enabled) VALUES (1, 1);

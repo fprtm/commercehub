@@ -6,6 +6,7 @@
 
 ## Changes (`changes/`, small-scope, no dedicated spec folder)
 - `2026-09-02-reconnect-throttle.md` — Baileys reconnect-throttle mitigation (done, reviewed, `reports/2026-09-02-reconnect-throttle-review.md`).
+- `2026-09-03-credentials-in-db.md` — WhatsApp Cloud API + Telegram credentials moved from `.env` to the DB, editable at `/settings/credentials` (done).
 
 ## Decisions (`decisions/`)
 - `001-telegram-multichannel.md` — Telegram scoped into the existing app, raw HTTPS + long polling, DB stays per-app.
@@ -21,3 +22,4 @@
 
 ## Recent Activity
 - [2026-09-03] Task: baileys-contactid-and-failed-events-migration-fix — 2 bugs fixed, 14 traceability problems resolved → [report](reports/2026-09-03-baileys-contactid-and-failed-events-migration-fix.md)
+- [2026-09-03] Task: credentials-in-db — WhatsApp/Telegram credentials moved from `.env` to DB, new `/settings/credentials` dashboard page → [change](changes/2026-09-03-credentials-in-db.md)

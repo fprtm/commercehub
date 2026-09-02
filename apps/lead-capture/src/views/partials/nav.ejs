@@ -2,8 +2,8 @@
 /*
   FR-701 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
   a persistent nav bar included at the top of every authenticated dashboard
-  view (leads.ejs, products.ejs, failedEvents.ejs, whatsappPair.ejs), so no
-  page requires typing a URL manually. A single shared partial -- the
+  view (leads.ejs, products.ejs, failedEvents.ejs, whatsappPair.ejs,
+  credentials.ejs), so no page requires typing a URL manually. A single shared partial -- the
   simplest reasonable approach per the change doc -- rather than duplicating
   this markup/CSS in four separate views.
 
@@ -50,4 +50,5 @@
   <a href="/products" class="<%= typeof activeNav !== 'undefined' && activeNav === 'products' ? 'active' : '' %>">Products</a>
   <a href="/failed-events" class="<%= typeof activeNav !== 'undefined' && activeNav === 'failed-events' ? 'active' : '' %>">Failed Events</a>
   <a href="/whatsapp/pair" class="<%= typeof activeNav !== 'undefined' && activeNav === 'pairing' ? 'active' : '' %>">Pairing</a>
+  <a href="/settings/credentials" class="<%= typeof activeNav !== 'undefined' && activeNav === 'credentials' ? 'active' : '' %>">Credentials</a>
 </nav>
