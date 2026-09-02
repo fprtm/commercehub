@@ -7,6 +7,66 @@ const DEFAULT_BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_DELAY_MS = 60000;
 
 /**
+ * FR-1201..FR-1203 (docs/sdd/changes/2026-09-02-reconnect-throttle.md):
+ * a DIFFERENT concern from DEFAULT_BASE_DELAY_MS/DEFAULT_MAX_DELAY_MS above,
+ * which govern how long we wait before *attempting* a reconnect. These
+ * govern how much extra delay is added before an outbound *message send*,
+ * for a short cooldown window after a reconnect has already SUCCEEDED --
+ * research (Baileys issues #2110/#1869, cited in the change doc) found
+ * frequent reconnects are an independent ban-risk signal, and that easing
+ * send speed back up over ~60s after a reconnect (rather than resuming at
+ * full speed immediately) is a documented, if unproven, mitigation.
+ */
+// Cooldown window: how long after a genuine reconnect the throttle applies.
+// Past this, sends resume at normal (1x) speed.
+const DEFAULT_RECONNECT_THROTTLE_WINDOW_MS = 60000;
+// Extra-delay multiplier applied immediately after a reconnect, linearly
+// ramping down to 1x (no extra delay) at the end of the cooldown window.
+const DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER = 3;
+// The per-message unit of "extra delay" the multiplier above is applied to
+// (extraDelayMs = baseThrottleDelayMs * (multiplier - 1)) -- independent of
+// DEFAULT_BASE_DELAY_MS (reconnect-attempt backoff) on purpose, since this
+// governs a send-side delay, not a reconnect-scheduling delay.
+const DEFAULT_RECONNECT_THROTTLE_BASE_DELAY_MS = 1000;
+
+/**
+ * FR-1201/NFR-1202: pure, directly-testable ramp calculation -- given how
+ * long it's been since a genuine reconnect, returns the extra-delay
+ * multiplier that should apply to this send (1 = no extra delay).
+ *
+ * Deliberately kept free of clocks/timers/async so it can be asserted
+ * against exact time values in tests (0s/30s/60s/90s etc.) without any fake
+ * timer machinery -- see baileysConnector.test.js.
+ *
+ * Linear ramp: `maxMultiplier` at msSinceReconnect=0, decreasing linearly to
+ * 1 at msSinceReconnect=windowMs, then holding at 1 for anything beyond.
+ *
+ * @param {number|null|undefined} msSinceReconnect - null/undefined means
+ *   "no genuine reconnect has happened this session" (FR-1202: first-ever
+ *   connect) -- always returns 1 (no throttle) in that case.
+ * @param {object} [options]
+ * @param {number} [options.windowMs] - defaults to DEFAULT_RECONNECT_THROTTLE_WINDOW_MS
+ * @param {number} [options.maxMultiplier] - defaults to DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER
+ * @returns {number} the delay multiplier, in [1, maxMultiplier]
+ */
+function calculateReconnectThrottleMultiplier(msSinceReconnect, options = {}) {
+  const {
+    windowMs = DEFAULT_RECONNECT_THROTTLE_WINDOW_MS,
+    maxMultiplier = DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER,
+  } = options;
+
+  if (msSinceReconnect === null || msSinceReconnect === undefined) return 1;
+  // Negative elapsed time shouldn't be reachable in practice (clock going
+  // backwards), but treat it the same as "just reconnected" rather than
+  // producing a multiplier outside [1, maxMultiplier].
+  if (msSinceReconnect <= 0) return maxMultiplier;
+  if (msSinceReconnect >= windowMs) return 1;
+
+  const progress = msSinceReconnect / windowMs; // 0 (just reconnected) -> 1 (window elapsed)
+  return maxMultiplier - (maxMultiplier - 1) * progress;
+}
+
+/**
  * Everything below that reaches into `@whiskeysockets/baileys` / `pino` /
  * the filesystem is required lazily, inside the default factory functions
  * -- never at module load time. That means simply requiring this file (as
@@ -225,6 +285,24 @@ function extractBaileysContent(message) {
  * @param {number} [deps.maxDelayMs]
  * @param {(fn: Function, delayMs: number) => unknown} [deps.scheduleReconnect] - injectable for tests (real default: setTimeout)
  * @param {(handle: unknown) => void} [deps.clearScheduled] - injectable for tests (real default: clearTimeout)
+ * @param {() => number} [deps.now] - injectable clock (real default: `Date.now`) (FR-1201/NFR-1202) --
+ *   used to timestamp genuine reconnects and to compute elapsed time in
+ *   `sendTextMessage`'s throttle check.
+ * @param {(ms: number) => Promise<unknown>} [deps.sleep] - injectable delay
+ *   mechanism (real default: a `setTimeout`-based sleep) (FR-1201/NFR-1202)
+ *   -- the reconnect-throttle's own pre-send delay, applied in
+ *   `sendTextMessage` before calling `sock.sendMessage`. Deliberately
+ *   separate from @rimba/humanized-timing's own injectable `sleep` (this
+ *   package doesn't own that module's delay logic -- see this file's
+ *   `sendTextMessage` doc comment).
+ * @param {number} [deps.reconnectThrottleWindowMs] - FR-1203: cooldown window
+ *   duration, defaults to DEFAULT_RECONNECT_THROTTLE_WINDOW_MS (60s).
+ * @param {number} [deps.reconnectThrottleMaxMultiplier] - FR-1203: extra-delay
+ *   multiplier immediately after a reconnect, defaults to
+ *   DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER (3x).
+ * @param {number} [deps.reconnectThrottleBaseDelayMs] - FR-1203: the ms unit
+ *   the multiplier above scales, defaults to
+ *   DEFAULT_RECONNECT_THROTTLE_BASE_DELAY_MS.
  */
 function createBaileysConnector({
   authDir,
@@ -240,6 +318,11 @@ function createBaileysConnector({
   maxDelayMs = DEFAULT_MAX_DELAY_MS,
   scheduleReconnect = (fn, delayMs) => setTimeout(fn, delayMs),
   clearScheduled = (handle) => clearTimeout(handle),
+  now = () => Date.now(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  reconnectThrottleWindowMs = DEFAULT_RECONNECT_THROTTLE_WINDOW_MS,
+  reconnectThrottleMaxMultiplier = DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER,
+  reconnectThrottleBaseDelayMs = DEFAULT_RECONNECT_THROTTLE_BASE_DELAY_MS,
 }) {
   const state = {
     // 'disconnected' | 'connecting' | 'qr_pending' | 'open' | 'reconnecting' | 'action_needed'
@@ -252,6 +335,16 @@ function createBaileysConnector({
     // corrupted vs. forbidden) rather than one generic message.
     disconnectReasonCode: null,
     disconnectReasonMessage: null,
+    // FR-1201/FR-1202: true once this session's socket has reached 'open'
+    // at least once -- used to distinguish "first-ever connect" (never
+    // throttled) from a genuine reconnect (every 'open' after the first).
+    hasConnectedOnce: false,
+    // FR-1201: `now()` timestamp of the most recent GENUINE reconnect (i.e.
+    // NOT the first-ever connect of this session). null means no genuine
+    // reconnect has happened yet -- sendTextMessage's throttle check treats
+    // that as "never throttle" (FR-1202), same as calling
+    // calculateReconnectThrottleMultiplier(null).
+    lastReconnectAt: null,
   };
   let sock = null;
   let reconnectTimer = null;
@@ -311,6 +404,17 @@ function createBaileysConnector({
     }
 
     if (connection === 'open') {
+      // FR-1201/FR-1202: a genuine reconnect is any 'open' event that is NOT
+      // this session's first-ever successful connection -- Baileys only
+      // fires 'open' after (re-)establishing the socket, so a second (or
+      // later) 'open' necessarily followed a prior disconnect/close.
+      const isGenuineReconnect = state.hasConnectedOnce;
+      if (isGenuineReconnect) {
+        state.lastReconnectAt = now();
+        log('baileys_reconnect_throttle_window_started', { lastReconnectAt: state.lastReconnectAt });
+      }
+      state.hasConnectedOnce = true;
+
       state.connectionStatus = 'open';
       state.qrDataUrl = null;
       state.reconnectAttempts = 0;
@@ -389,9 +493,37 @@ function createBaileysConnector({
     }
   }
 
+  /**
+   * FR-1201: if this send falls within the reconnect-throttle cooldown
+   * window, sleeps an extra `reconnectThrottleBaseDelayMs * (multiplier - 1)`
+   * ms before returning -- on top of, not instead of, whatever delay
+   * @rimba/humanized-timing's sendWithHumanizedTiming already applied
+   * upstream (inboundMessageProcessor.js calls that module BEFORE invoking
+   * this connector's sendTextMessage -- see that module's doc comment).
+   * This package deliberately does not reach into or duplicate
+   * humanized-timing's own delay math; it only adds its own additional
+   * pre-send delay, using its own injectable `now`/`sleep` (NFR-1202/NFR-603
+   * pattern) so this stays independently, deterministically testable.
+   *
+   * A no-op multiplier of 1 (outside the cooldown window, or no genuine
+   * reconnect has happened this session -- FR-1202) sleeps 0ms, i.e. no
+   * observable delay at all.
+   */
+  async function applyReconnectThrottleDelay() {
+    const multiplier = calculateReconnectThrottleMultiplier(
+      state.lastReconnectAt === null ? null : now() - state.lastReconnectAt,
+      { windowMs: reconnectThrottleWindowMs, maxMultiplier: reconnectThrottleMaxMultiplier },
+    );
+    if (multiplier <= 1) return;
+    const extraDelayMs = Math.round(reconnectThrottleBaseDelayMs * (multiplier - 1));
+    log('baileys_reconnect_throttle_applied', { multiplier, extraDelayMs });
+    await sleep(extraDelayMs);
+  }
+
   /** FR-302's outbound half of the shared contract. */
   async function sendTextMessage(phoneNumber, text) {
     if (!sock) throw new Error('Baileys socket is not connected');
+    await applyReconnectThrottleDelay();
     await sock.sendMessage(toJid(phoneNumber), { text });
   }
 
@@ -472,6 +604,13 @@ function createBaileysConnector({
     state.lastDisconnectStatusCode = null;
     state.disconnectReasonCode = null;
     state.disconnectReasonMessage = null;
+    // FR-1202 (judgment call): re-pairing wipes the session's auth files and
+    // starts fresh -- a brand new WhatsApp linked-device session, not a
+    // "genuine reconnect" of the old one. So the very next 'open' after this
+    // must be treated as this (new) session's first-ever connect, exactly
+    // like the first `start()` call ever was -- not throttled.
+    state.hasConnectedOnce = false;
+    state.lastReconnectAt = null;
     return start();
   }
 
@@ -494,4 +633,13 @@ function createBaileysConnector({
   };
 }
 
-module.exports = { createBaileysConnector, toPhoneNumber, toJid, extractBaileysContent };
+module.exports = {
+  createBaileysConnector,
+  toPhoneNumber,
+  toJid,
+  extractBaileysContent,
+  calculateReconnectThrottleMultiplier,
+  DEFAULT_RECONNECT_THROTTLE_WINDOW_MS,
+  DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER,
+  DEFAULT_RECONNECT_THROTTLE_BASE_DELAY_MS,
+};

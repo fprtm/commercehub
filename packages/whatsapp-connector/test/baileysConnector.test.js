@@ -4,7 +4,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 
-const { createBaileysConnector } = require('../src/baileysConnector');
+const {
+  createBaileysConnector,
+  calculateReconnectThrottleMultiplier,
+  DEFAULT_RECONNECT_THROTTLE_WINDOW_MS,
+  DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER,
+} = require('../src/baileysConnector');
 // The real package (already an installed dependency) is used only for its
 // DisconnectReason numeric constants -- requiring it does not open a
 // network connection or touch a real WhatsApp account.
@@ -475,4 +480,195 @@ test('FR-601/FR-604: markAsRead/sendTypingIndicator never throw even if the unde
 
   assert.ok(logs.some((l) => l.event === 'baileys_mark_read_failed'));
   assert.ok(logs.some((l) => l.event === 'baileys_typing_indicator_failed'));
+});
+
+// --- FR-1201..FR-1203/NFR-1201/NFR-1202 (docs/sdd/changes/2026-09-02-
+// reconnect-throttle.md): after a genuine reconnect, sendTextMessage adds
+// extra pre-send delay for a 60s cooldown, ramping from 3x down to 1x -- a
+// DIFFERENT concern from the reconnect-ATTEMPT backoff tested above (that's
+// "how long to wait before trying to reconnect"; this is "how much to slow
+// down sends for a bit after a reconnect already succeeded").
+
+// --- calculateReconnectThrottleMultiplier: the pure ramp function itself
+// (NFR-1202) -- asserted directly against exact time values, no connector,
+// no timers, no async involved at all.
+
+test('FR-1201/NFR-1202: calculateReconnectThrottleMultiplier ramps linearly from 3x at t=0 down to 1x at the 60s cooldown mark, then holds at 1x', () => {
+  assert.equal(calculateReconnectThrottleMultiplier(0), 3, 'immediately after reconnect: max multiplier (3x)');
+  assert.equal(calculateReconnectThrottleMultiplier(30000), 2, '30s in (linear midpoint of 3x..1x): 2x');
+  assert.equal(calculateReconnectThrottleMultiplier(60000), 1, 'exactly at the 60s cooldown mark: back to 1x (no extra delay)');
+  assert.equal(calculateReconnectThrottleMultiplier(90000), 1, 'past the cooldown window: still 1x, not below/above');
+});
+
+test('FR-1202: calculateReconnectThrottleMultiplier(null|undefined) is always 1x -- "no genuine reconnect yet this session" means never throttle', () => {
+  assert.equal(calculateReconnectThrottleMultiplier(null), 1);
+  assert.equal(calculateReconnectThrottleMultiplier(undefined), 1);
+});
+
+test('FR-1203: calculateReconnectThrottleMultiplier honors custom windowMs/maxMultiplier options instead of hardcoded defaults', () => {
+  assert.equal(calculateReconnectThrottleMultiplier(0, { windowMs: 10000, maxMultiplier: 5 }), 5);
+  assert.equal(calculateReconnectThrottleMultiplier(5000, { windowMs: 10000, maxMultiplier: 5 }), 3, 'midpoint of a custom 10s window/5x max: 3x');
+  assert.equal(calculateReconnectThrottleMultiplier(10000, { windowMs: 10000, maxMultiplier: 5 }), 1);
+});
+
+test('FR-1203: the exported defaults match the documented 60s window / 3x max multiplier', () => {
+  assert.equal(DEFAULT_RECONNECT_THROTTLE_WINDOW_MS, 60000);
+  assert.equal(DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER, 3);
+});
+
+// --- Connector-level integration: real sendTextMessage, with an injectable
+// fake clock (`now`) and a fake `sleep` that records calls instead of
+// actually waiting, so "1 second after reconnect" vs "90 seconds after
+// reconnect" can be simulated without the test suite ever waiting in real
+// time (matching the existing injectable-sleep pattern already used by
+// @rimba/humanized-timing's own tests).
+
+function buildThrottleConnector({ initialTime = 0, connectorOverrides = {} } = {}) {
+  let currentTime = initialTime;
+  const sleepCalls = [];
+  const built = buildConnector({
+    connectorOverrides: {
+      now: () => currentTime,
+      sleep: async (ms) => {
+        sleepCalls.push(ms);
+      },
+      ...connectorOverrides,
+    },
+  });
+  return { ...built, sleepCalls, advanceTime: (ms) => { currentTime += ms; } };
+}
+
+const RECOVERABLE_CLOSE_EVENT = {
+  connection: 'close',
+  lastDisconnect: { error: { output: { statusCode: DisconnectReason.connectionLost } } },
+};
+
+test('FR-1202 (acceptance): the very first connection of a session sends at normal speed -- no extra delay at all', async () => {
+  const { connector, sleepCalls, getSock } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' }); // first-ever open of this session
+
+  await connector.sendTextMessage('6281234567890', 'hello');
+
+  assert.equal(sleepCalls.length, 0, 'no reconnect-throttle sleep should ever be invoked for the first-ever connection of a session');
+  assert.equal(getSock().sent.length, 1, 'the message must still be sent normally');
+});
+
+test('FR-1201: a genuine reconnect after a disconnect DOES throttle a send made shortly afterward', async () => {
+  const { connector, sleepCalls, advanceTime } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' }); // first-ever connect -- not throttled
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT); // genuine disconnect
+  await connector._handleConnectionUpdate({ connection: 'open' }); // genuine RECONNECT -- starts the cooldown window
+
+  advanceTime(1000); // 1s after the reconnect
+  await connector.sendTextMessage('6281234567890', 'hi');
+
+  assert.equal(sleepCalls.length, 1, 'a send within the cooldown window after a genuine reconnect must be throttled');
+  assert.ok(sleepCalls[0] > 0, 'the extra delay must be a real, positive amount of ms');
+});
+
+test('FR-1201 (acceptance): immediately after reconnect (t=0) the extra delay is exactly baseDelayMs * (maxMultiplier - 1) using the documented defaults', async () => {
+  const { connector, sleepCalls } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' });
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // reconnect at t=0, no advanceTime() call
+
+  await connector.sendTextMessage('6281234567890', 'hi');
+
+  // Defaults: reconnectThrottleBaseDelayMs=1000, maxMultiplier=3 -> 1000*(3-1) = 2000ms.
+  assert.deepEqual(sleepCalls, [2000]);
+});
+
+test('FR-1201 (acceptance): a message sent 1 second after a reconnect is delayed noticeably longer than the same message sent 90 seconds after a reconnect', async () => {
+  const { connector, sleepCalls, advanceTime } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' });
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // reconnect at t=0
+
+  advanceTime(1000);
+  await connector.sendTextMessage('a', 'sent 1s after reconnect');
+  const delayAt1s = sleepCalls[0];
+
+  advanceTime(89000); // now 90s after the reconnect
+  await connector.sendTextMessage('a', 'sent 90s after reconnect');
+
+  assert.equal(sleepCalls.length, 1, 'the 90s-later send must get zero extra delay -- past the cooldown window entirely');
+  assert.ok(delayAt1s > 0, 'the 1s-later send must have been meaningfully delayed');
+});
+
+test('FR-1201: the throttle delay decays as the cooldown window elapses, and drops to no delay at all once it fully elapses', async () => {
+  const { connector, sleepCalls, advanceTime } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' });
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // reconnect at t=0
+
+  advanceTime(1000); // 1s in: near-max extra delay
+  await connector.sendTextMessage('a', '1');
+  advanceTime(58000); // 59s in: still inside the window, near-zero extra delay
+  await connector.sendTextMessage('a', '2');
+  advanceTime(31000); // 90s in: outside the window entirely
+  await connector.sendTextMessage('a', '3');
+
+  assert.equal(sleepCalls.length, 2, 'only the two sends still inside the 60s cooldown window get a recorded sleep call');
+  assert.ok(sleepCalls[0] > sleepCalls[1], 'extra delay must shrink monotonically as more time passes since the reconnect');
+});
+
+test('FR-1201: a second genuine reconnect restarts the cooldown window from its own new reconnect time', async () => {
+  const { connector, sleepCalls, advanceTime } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' }); // first-ever connect
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // reconnect #1 at t=0
+
+  advanceTime(70000); // past reconnect #1's cooldown window entirely
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // reconnect #2 at t=70000
+
+  await connector.sendTextMessage('a', 'right after reconnect #2');
+
+  assert.equal(sleepCalls.length, 1, 'reconnect #2 must start its own fresh cooldown window, throttling this send even though reconnect #1\'s window had already fully elapsed');
+});
+
+test('FR-1203: reconnectThrottleWindowMs/reconnectThrottleMaxMultiplier/reconnectThrottleBaseDelayMs are configurable, not hardcoded', async () => {
+  const { connector, sleepCalls, advanceTime } = buildThrottleConnector({
+    connectorOverrides: {
+      reconnectThrottleWindowMs: 10000,
+      reconnectThrottleMaxMultiplier: 5,
+      reconnectThrottleBaseDelayMs: 100,
+    },
+  });
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' });
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // reconnect at t=0
+
+  await connector.sendTextMessage('a', 'immediately after reconnect');
+  assert.deepEqual(sleepCalls, [400], 'custom config: baseDelayMs(100) * (maxMultiplier(5) - 1) = 400ms at t=0');
+
+  advanceTime(10000); // exactly at the custom 10s window
+  await connector.sendTextMessage('a', 'at the custom window mark');
+  assert.equal(sleepCalls.length, 1, 'no additional sleep call once past the custom (shorter) cooldown window');
+});
+
+test('FR-1202 (judgment call): resetAndRestart() treats the next connection as a fresh session\'s first-ever connect, not a reconnect', async () => {
+  const { connector, sleepCalls, advanceTime } = buildThrottleConnector();
+  await connector.start();
+  await connector._handleConnectionUpdate({ connection: 'open' }); // first-ever connect
+  await connector._handleConnectionUpdate(RECOVERABLE_CLOSE_EVENT);
+  await connector._handleConnectionUpdate({ connection: 'open' }); // genuine reconnect at t=0
+
+  advanceTime(1000);
+  await connector.sendTextMessage('a', 'throttled, mid-cooldown');
+  assert.equal(sleepCalls.length, 1, 'sanity check: still inside the original cooldown window before resetAndRestart()');
+
+  await connector.resetAndRestart(); // re-pair: wipes auth, starts a brand-new session
+  await connector._handleConnectionUpdate({ connection: 'open' }); // this new session's first-ever connect
+
+  await connector.sendTextMessage('a', 'right after re-pairing');
+
+  assert.equal(sleepCalls.length, 1, 'the first connect of the NEW (re-paired) session must not be throttled, even though the old session was mid-cooldown');
 });

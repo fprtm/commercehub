@@ -36,7 +36,16 @@
  * comment for the fuller "persistent-connection vs push-webhook"
  * reasoning this package inherits verbatim from the source app).
  */
-const { createBaileysConnector, toPhoneNumber, toJid, extractBaileysContent } = require('./baileysConnector');
+const {
+  createBaileysConnector,
+  toPhoneNumber,
+  toJid,
+  extractBaileysContent,
+  calculateReconnectThrottleMultiplier,
+  DEFAULT_RECONNECT_THROTTLE_WINDOW_MS,
+  DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER,
+  DEFAULT_RECONNECT_THROTTLE_BASE_DELAY_MS,
+} = require('./baileysConnector');
 const { createMetaClient, GRAPH_API_VERSION } = require('./metaClient');
 
 module.exports = {
@@ -46,4 +55,11 @@ module.exports = {
   toJid,
   extractBaileysContent,
   GRAPH_API_VERSION,
+  // FR-1201..FR-1203 (docs/sdd/changes/2026-09-02-reconnect-throttle.md):
+  // Baileys-only -- metaClient.js/Cloud API has no connection-lifecycle
+  // concept to throttle, so nothing here comes from it.
+  calculateReconnectThrottleMultiplier,
+  DEFAULT_RECONNECT_THROTTLE_WINDOW_MS,
+  DEFAULT_RECONNECT_THROTTLE_MAX_MULTIPLIER,
+  DEFAULT_RECONNECT_THROTTLE_BASE_DELAY_MS,
 };
