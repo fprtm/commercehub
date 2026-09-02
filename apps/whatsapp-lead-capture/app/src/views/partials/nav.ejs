@@ -1,0 +1,53 @@
+<%
+/*
+  FR-701 (docs/sdd/changes/2026-09-02-dashboard-nav-product-ui-connection-resilience.md):
+  a persistent nav bar included at the top of every authenticated dashboard
+  view (leads.ejs, products.ejs, failedEvents.ejs, whatsappPair.ejs), so no
+  page requires typing a URL manually. A single shared partial -- the
+  simplest reasonable approach per the change doc -- rather than duplicating
+  this markup/CSS in four separate views.
+
+  Ships its own <style> block (scoped to the .app-nav* class names below) so
+  every including view gets consistent styling automatically, without each
+  view's own pre-existing <style> block needing to know about it. Matches
+  this app's existing minimal design language (see leads.ejs/whatsappPair.ejs):
+  same font stack, the same #2b2b2b/#f6f5f2/#eee palette, the same
+  rounded-corner/no-JS conventions -- no new design language introduced.
+
+  `activeNav` (one of 'leads' | 'products' | 'failed-events' | 'pairing') is
+  an optional local -- callers that don't pass it just get a nav bar with no
+  highlighted link, still fully functional.
+*/
+%>
+<style>
+  .app-nav {
+    background: #fff;
+    border-bottom: 1px solid #eee;
+    padding: 0.6rem 1.5rem;
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .app-nav a {
+    color: #555;
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 0.4rem 0.9rem;
+    border-radius: 6px;
+  }
+  .app-nav a:hover {
+    background: #f0f0f0;
+    color: #2b2b2b;
+  }
+  .app-nav a.active {
+    background: #2b2b2b;
+    color: #fff;
+  }
+</style>
+<nav class="app-nav">
+  <a href="/leads" class="<%= typeof activeNav !== 'undefined' && activeNav === 'leads' ? 'active' : '' %>">Leads</a>
+  <a href="/products" class="<%= typeof activeNav !== 'undefined' && activeNav === 'products' ? 'active' : '' %>">Products</a>
+  <a href="/failed-events" class="<%= typeof activeNav !== 'undefined' && activeNav === 'failed-events' ? 'active' : '' %>">Failed Events</a>
+  <a href="/whatsapp/pair" class="<%= typeof activeNav !== 'undefined' && activeNav === 'pairing' ? 'active' : '' %>">Pairing</a>
+</nav>

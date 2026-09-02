@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rimba Apparel — Leads</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f6f5f2; margin: 0; color: #2b2b2b; }
+    header { background: #2b2b2b; color: #fff; padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    header form { margin: 0; }
+    header button { background: transparent; border: 1px solid #777; color: #fff; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; }
+    main { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    .flash { background: #fff3cd; color: #664d03; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
+    .empty-state { background: #fff; padding: 3rem 2rem; text-align: center; border-radius: 12px; color: #666; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
+    th, td { text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid #eee; font-size: 0.92rem; vertical-align: top; }
+    th { background: #faf9f7; font-weight: 600; color: #555; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+    .badge-new { background: #e7f3ff; color: #0b5fb0; }
+    .badge-responded { background: #eaf7ea; color: #1e7d1e; }
+    .badge-closed { background: #eee; color: #666; }
+    .badge-new-indicator { background: #ffe4e4; color: #b3261e; margin-left: 0.4rem; }
+    .badge-needs-review { background: #fff0d6; color: #8a5300; margin-left: 0.4rem; }
+    .answer { color: #444; }
+    .answer.empty { color: #999; font-style: italic; }
+    .matched-product { display: block; margin-top: 0.3rem; font-size: 0.82rem; color: #1e7d1e; }
+    .additional-notes { display: block; margin-top: 0.5rem; padding: 0.5rem 0.6rem; background: #fdf6e3; border-left: 3px solid #d8b34b; border-radius: 4px; font-size: 0.82rem; color: #6b5a2a; white-space: pre-line; }
+    .additional-notes-label { display: block; font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.03em; color: #8a7434; margin-bottom: 0.2rem; }
+    .actions form { display: inline-block; margin-right: 0.4rem; }
+    .actions button { padding: 0.35rem 0.7rem; font-size: 0.82rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    .actions button:hover { background: #f0f0f0; }
+    .auto-reply-bar { display: flex; align-items: center; justify-content: space-between; background: #fff; padding: 0.9rem 1.2rem; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); margin-bottom: 1.5rem; }
+    .auto-reply-status { font-size: 0.92rem; }
+    .auto-reply-status .badge-on { background: #eaf7ea; color: #1e7d1e; }
+    .auto-reply-status .badge-off { background: #f4f4f4; color: #777; }
+    .auto-reply-bar button { padding: 0.4rem 0.9rem; font-size: 0.85rem; border-radius: 6px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    .auto-reply-bar button:hover { background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Rimba Apparel — Leads</h1>
+    <form method="POST" action="/logout">
+      <button type="submit">Log out</button>
+    </form>
+  </header>
+  <%- include('partials/nav', { activeNav: 'leads' }) %>
+  <main>
+    <div class="auto-reply-bar">
+      <span class="auto-reply-status">
+        Auto-reply is
+        <% if (autoReplyEnabled) { %>
+          <span class="badge badge-on">ON</span>
+        <% } else { %>
+          <span class="badge badge-off">OFF</span>
+        <% } %>
+      </span>
+      <form method="POST" action="/settings/auto-reply">
+        <button type="submit"><%= autoReplyEnabled ? 'Turn off' : 'Turn on' %></button>
+      </form>
+    </div>
+
+    <% if (flash) { %>
+      <div class="flash"><%= flash %></div>
+    <% } %>
+
+    <% if (leads.length === 0) { %>
+      <div class="empty-state">
+        <p><strong>No leads yet</strong></p>
+        <p>Once a customer messages your WhatsApp number, they'll show up here.</p>
+      </div>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr>
+            <th>Phone number</th>
+            <th>First message</th>
+            <th>Product interest (Q1)</th>
+            <th>Size / contact preference (Q2)</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% leads.forEach(function(lead) { %>
+            <tr>
+              <td><%= lead.phone_number %></td>
+              <td><%= new Date(lead.first_message_at).toLocaleString() %></td>
+              <td class="answer <%= lead.question1_answer ? '' : 'empty' %>">
+                <%= lead.question1_answer || 'No answer yet' %>
+                <% if (lead.matched_product) { %>
+                  <span class="matched-product">Matched product: <%= lead.matched_product %></span>
+                <% } %>
+              </td>
+              <td class="answer <%= lead.question2_answer ? '' : 'empty' %>">
+                <%= lead.question2_answer || 'No answer yet' %>
+                <% if (lead.additional_notes) { %>
+                  <span class="additional-notes">
+                    <span class="additional-notes-label">Additional notes (after flow completed)</span><%= lead.additional_notes %>
+                  </span>
+                <% } %>
+              </td>
+              <td>
+                <span class="badge badge-<%= lead.status %>"><%= lead.status %></span>
+                <% if (lead.status === 'new') { %>
+                  <span class="badge badge-new-indicator">New — needs review</span>
+                <% } %>
+                <% if (lead.needs_review) { %>
+                  <span class="badge badge-needs-review">Needs review — unmatched product</span>
+                <% } %>
+              </td>
+              <td class="actions">
+                <% if (lead.status === 'closed') { %>
+                  <span class="answer empty">No further action</span>
+                <% } else { %>
+                  <% if (lead.status !== 'responded') { %>
+                    <form method="POST" action="/leads/<%= lead.id %>/status">
+                      <input type="hidden" name="status" value="responded">
+                      <button type="submit">Mark responded</button>
+                    </form>
+                  <% } %>
+                  <form method="POST" action="/leads/<%= lead.id %>/status">
+                    <input type="hidden" name="status" value="closed">
+                    <button type="submit">Mark closed</button>
+                  </form>
+                <% } %>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    <% } %>
+  </main>
+</body>
+</html>

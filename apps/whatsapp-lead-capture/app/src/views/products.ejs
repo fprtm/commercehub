@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rimba Apparel — Products</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f6f5f2; margin: 0; color: #2b2b2b; }
+    header { background: #2b2b2b; color: #fff; padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 1.1rem; margin: 0; }
+    header form { margin: 0; }
+    header button { background: transparent; border: 1px solid #777; color: #fff; padding: 0.4rem 0.8rem; border-radius: 6px; cursor: pointer; }
+    main { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    .flash { background: #fff3cd; color: #664d03; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
+    .empty-state { background: #fff; padding: 3rem 2rem; text-align: center; border-radius: 12px; color: #666; }
+    .card { background: #fff; padding: 1.2rem 1.5rem; border-radius: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.06); margin-bottom: 1.5rem; }
+    .card h2 { margin-top: 0; font-size: 1rem; }
+    .field { margin-bottom: 0.9rem; }
+    .field label { display: block; font-size: 0.85rem; font-weight: 600; color: #444; margin-bottom: 0.3rem; }
+    .field input[type="text"] { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: 1px solid #ccc; border-radius: 6px; font-size: 0.92rem; }
+    .field .hint { color: #888; font-size: 0.78rem; margin-top: 0.25rem; }
+    .card button, .actions button { padding: 0.45rem 0.9rem; font-size: 0.85rem; border-radius: 6px; border: 1px solid #ccc; background: #2b2b2b; color: #fff; cursor: pointer; }
+    .card button:hover, .actions button:hover { background: #444; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 6px rgba(0,0,0,0.06); }
+    th, td { text-align: left; padding: 0.8rem 1rem; border-bottom: 1px solid #eee; font-size: 0.92rem; vertical-align: top; }
+    th { background: #faf9f7; font-weight: 600; color: #555; }
+    tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; }
+    .badge-active { background: #eaf7ea; color: #1e7d1e; }
+    .badge-inactive { background: #eee; color: #666; }
+    .aliases { color: #666; font-size: 0.85rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: flex-start; }
+    .actions form { margin: 0; }
+    .actions button.secondary { background: #fff; color: #2b2b2b; }
+    .actions button.secondary:hover { background: #f0f0f0; }
+    details.edit-form { width: 100%; }
+    details.edit-form summary { cursor: pointer; color: #0b5fb0; font-size: 0.85rem; padding: 0.45rem 0.2rem; }
+    details.edit-form .field { margin-top: 0.6rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Rimba Apparel — Products</h1>
+    <form method="POST" action="/logout">
+      <button type="submit">Log out</button>
+    </form>
+  </header>
+  <%- include('partials/nav', { activeNav: 'products' }) %>
+  <main>
+    <% if (flash) { %>
+      <div class="flash"><%= flash %></div>
+    <% } %>
+
+    <div class="card">
+      <h2>Add a product</h2>
+      <form method="POST" action="/products">
+        <div class="field">
+          <label for="name">Product name</label>
+          <input type="text" id="name" name="name" required>
+        </div>
+        <div class="field">
+          <label for="aliases">Aliases (comma-separated, optional)</label>
+          <input type="text" id="aliases" name="aliases" placeholder="e.g. kaos navy, kaos, baju kaos">
+          <div class="hint">Short, natural words customers actually type -- see the README's "Fuzzy product matching" section for why aliases matter more than the full name.</div>
+        </div>
+        <button type="submit">Add product</button>
+      </form>
+    </div>
+
+    <% if (products.length === 0) { %>
+      <div class="empty-state">
+        <p><strong>No products yet</strong></p>
+        <p>Add your first product above. Until then, every customer's product question is flagged "Needs review" on the Leads page.</p>
+      </div>
+    <% } else { %>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Aliases</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% products.forEach(function(product) { %>
+            <tr>
+              <td><%= product.name %></td>
+              <td class="aliases"><%= product.aliases.length > 0 ? product.aliases.join(', ') : '—' %></td>
+              <td>
+                <% if (product.is_active) { %>
+                  <span class="badge badge-active">Active</span>
+                <% } else { %>
+                  <span class="badge badge-inactive">Deactivated</span>
+                <% } %>
+              </td>
+              <td class="actions">
+                <details class="edit-form">
+                  <summary>Edit</summary>
+                  <form method="POST" action="/products/<%= product.id %>">
+                    <div class="field">
+                      <label for="name-<%= product.id %>">Product name</label>
+                      <input type="text" id="name-<%= product.id %>" name="name" value="<%= product.name %>" required>
+                    </div>
+                    <div class="field">
+                      <label for="aliases-<%= product.id %>">Aliases (comma-separated)</label>
+                      <input type="text" id="aliases-<%= product.id %>" name="aliases" value="<%= product.aliases.join(', ') %>">
+                    </div>
+                    <button type="submit">Save changes</button>
+                  </form>
+                </details>
+                <% if (product.is_active) { %>
+                  <form method="POST" action="/products/<%= product.id %>/deactivate">
+                    <button type="submit" class="secondary">Deactivate</button>
+                  </form>
+                <% } else { %>
+                  <form method="POST" action="/products/<%= product.id %>/activate">
+                    <button type="submit" class="secondary">Reactivate</button>
+                  </form>
+                <% } %>
+              </td>
+            </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    <% } %>
+  </main>
+</body>
+</html>

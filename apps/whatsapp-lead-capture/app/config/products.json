@@ -1,0 +1,21 @@
+{
+  "matchThreshold": 0.65,
+  "products": [
+    {
+      "name": "Kaos Rimba Navy",
+      "aliases": ["kaos navy", "baju kaos"]
+    },
+    {
+      "name": "Kaos Rimba Hitam",
+      "aliases": ["kaos hitam"]
+    },
+    {
+      "name": "Celana Rimba Cargo",
+      "aliases": ["celana cargo", "celana"]
+    },
+    {
+      "name": "Jaket Rimba Outdoor",
+      "aliases": ["jaket", "jaket outdoor"]
+    }
+  ]
+}

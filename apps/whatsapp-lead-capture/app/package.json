@@ -1,0 +1,33 @@
+{
+  "name": "whatsapp-lead-capture",
+  "version": "1.0.0",
+  "description": "WhatsApp Lead Capture & Auto-Responder for Rimba Apparel (portfolio demo project).",
+  "private": true,
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node src/db/migrate.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "natural": "^8.1.1",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
+    "sastrawijs": "1.0.4"
+  },
+  "allowScripts": {
+    "@whiskeysockets/baileys@7.0.0-rc14": true,
+    "better-sqlite3@13.0.3": true,
+    "protobufjs@7.6.6": true
+  }
+}
