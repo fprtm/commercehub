@@ -7,6 +7,7 @@
 4. `../fsd.md` (~5 min) — flows, edge cases, error flows, business rules. Read before reviewing any ticket's implementation.
 5. `../ux.md` (~1 min) — dashboard channel badge + filter, if reviewing the UI delta.
 6. Tickets below, in dependency order — only the ones relevant to what you're reviewing next.
+7. `docs/sdd/reports/2026-09-02-telegram-multichannel-review.md` (~2 min) — independent adversarial review, verdict PASS. Read this last, after forming your own view.
 
 ## Dependency graph
 ```

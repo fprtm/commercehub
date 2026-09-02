@@ -2,7 +2,7 @@
 
 ## Features (`specs/{NNN}-{slug}/`)
 - **001-monorepo-migration** — Turborepo migration of Project 1 into `apps/whatsapp-lead-capture` (now renamed, see 002) + 3 shared packages. See `specs/001-monorepo-migration/`.
-- **002-telegram-multichannel** — Telegram added as a second concurrent channel; app renamed to `apps/lead-capture`. Start at `specs/002-telegram-multichannel/tickets/00-index.md`.
+- **002-telegram-multichannel** — Telegram added as a second concurrent channel; app renamed to `apps/lead-capture`. Built, reviewed (PASS), `reports/2026-09-02-telegram-multichannel-review.md`. Start at `specs/002-telegram-multichannel/tickets/00-index.md`.
 
 ## Changes (`changes/`, small-scope, no dedicated spec folder)
 - `2026-09-02-reconnect-throttle.md` — Baileys reconnect-throttle mitigation (done, reviewed, `reports/2026-09-02-reconnect-throttle-review.md`).
@@ -12,6 +12,7 @@
 
 ## Reports (`reports/`)
 - `2026-09-02-reconnect-throttle-review.md` — independent review, PASS.
+- `2026-09-02-telegram-multichannel-review.md` — independent review of 002-telegram-multichannel, PASS.
 
 ## Other
 - `glossary.md` — domain terms (Channel, Connector).

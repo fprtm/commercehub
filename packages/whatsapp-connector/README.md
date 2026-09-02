@@ -13,7 +13,7 @@ sendTypingIndicator(phoneNumber, messageId)       // -> Promise, never throws
 
 See `src/index.js`'s header comment for the fuller "why these two modes
 deliberately differ" reasoning, and the consuming app's README
-(`apps/whatsapp-lead-capture/README.md`, "Dual WhatsApp mode" section) for
+(`apps/lead-capture/README.md`, "Dual WhatsApp mode" section) for
 the end-to-end picture, including the general Baileys ban-risk disclosure.
 This README covers only what's specific to this package.
 
@@ -64,7 +64,7 @@ like a human resuming a conversation would, over roughly a minute. See
   ms via an injectable `sleep`, defaulting to a real `setTimeout`-based
   sleep. This is *additional* delay on top of, never instead of, whatever
   `@rimba/humanized-timing`'s `sendWithHumanizedTiming` already applied
-  upstream (in `apps/whatsapp-lead-capture/src/services/
+  upstream (in `apps/lead-capture/src/services/
   inboundMessageProcessor.js`) — this package doesn't reach into or
   duplicate that module's own delay logic; it only adds its own pre-send
   delay at the one point it actually owns, the call to the real socket.
@@ -82,7 +82,7 @@ all with sane defaults, none hardcoded inline in the logic:
 
 **Honest framing — reduces this risk, does not eliminate it.** Same
 disclosure pattern as everything else Baileys-related in this project (see
-`apps/whatsapp-lead-capture/README.md`'s "Dual WhatsApp mode" section): this
+`apps/lead-capture/README.md`'s "Dual WhatsApp mode" section): this
 is a commonly-cited, plausible mitigation for one specific, documented
 ban-risk factor (reconnect frequency/burstiness), not a fix for Baileys
 being an unofficial, reverse-engineered protocol implementation in the
